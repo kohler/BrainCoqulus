@@ -50,10 +50,108 @@ Lemma bfapp_bfz_r bf:
   now rewrite IHbf.
 Qed.
 
+Lemma bfapp_inv_r bf bf':
+  bfapp bf bf' = bf -> bf' = bfz.
+  induction bf; cbn; auto.
+  intros; inversion H; now apply IHbf.
+Qed.
+
+Lemma bfapp_singleton_r bf bf1:
+  bfapp bf (bfc bf1 bfz) = bfrevc bf bf1.
+  induction bf; cbn; auto.
+  now rewrite IHbf.
+Qed.
+
 Lemma append_nil_r:
   forall s, (s ++ "" = s)%string.
   induction s; cbn; try rewrite IHs; auto.
 Qed.
+
+Lemma append_assoc:
+  forall s1 s2 s3, (s1 ++ s2 ++ s3 = (s1 ++ s2) ++ s3)%string.
+  induction s1; cbn; intros; auto.
+  now rewrite IHs1.
+Qed.
+
+Lemma append_length:
+  forall s1 s2, (length (s1 ++ s2) = length s1 + length s2)%string.
+  induction s1; cbn; auto.
+Qed.
+
+Lemma append_inv_ch_tail:
+  forall s1 s2 ch, (s1 ++ String ch "" = s2 ++ String ch "" -> s1 = s2)%string.
+  induction s1; intros.
+  destruct s2; simpl in H; auto.
+  generalize (append_length (String a "") (s2 ++ String ch "")); intro L.
+  replace ((String a "" ++ s2 ++ String ch "")%string) with ((String a (s2 ++ String ch ""))%string) in L by (now cbn).
+  rewrite <- H in L.
+  rewrite append_length in L.
+  cbn in L; omega.
+
+  simpl in H.
+  destruct s2; simpl in H.
+  destruct s1; simpl in H; inversion H.
+  inversion H.
+  apply IHs1 in H2.
+  now rewrite H2.
+Qed.
+
+Lemma append_inv_tail:
+  forall s1 s2 s, (s1 ++ s = s2 ++ s -> s1 = s2)%string.
+Proof.
+  intros s1 s2 s; revert s1 s2; induction s; intros.
+  now repeat rewrite append_nil_r in H.
+  replace (String a s) with ((String a EmptyString ++ s)%string) in H by (now cbn).
+  repeat rewrite append_assoc in H.
+  apply IHs in H.
+  now apply append_inv_ch_tail in H.
+Qed.
+
+Lemma append_tail:
+  forall s1 s2 s, (s1 = s2 -> s1 ++ s = s2 ++ s)%string.
+  intros; now subst.
+Qed.
+
+Lemma substring_empty:
+  forall n s, substring n 0 s = ""%string.
+  induction n; cbn.
+  destruct s; auto.
+  intros; destruct s; cbn; auto.
+Qed.
+
+Lemma substring_length_1:
+  forall s m, length (substring 0 m s) = min m (length s).
+  induction s; induction m.
+  1-3: now cbn.
+  simpl; now rewrite IHs.
+Qed.
+
+Lemma substring_length:
+  forall s n m, length (substring n m s) = min m (length s - n).
+  induction s; induction n; induction m.
+  1-5: now cbn.
+  cbn; now rewrite substring_length_1.
+  cbn; rewrite IHs; now cbn.
+  cbn; rewrite IHs.
+  remember (length s - n) as lsn; destruct lsn.
+  now cbn.
+  rewrite Nat.succ_min_distr; auto.
+Qed.
+
+
+Inductive bneststring :=
+| bns_empty
+| bns_ch : ascii -> bneststring
+| bns_app : bneststring -> bneststring -> bneststring
+| bns_nest : bneststring -> bneststring.
+
+Fixpoint unparse_bns b :=
+  match b with
+  | bns_empty => ""%string
+  | bns_ch ch => String ch ""
+  | bns_app s1 s2 => (unparse_bns s1 ++ unparse_bns s2)%string
+  | bns_nest s => String "[" (unparse_bns s ++ "]")
+  end.
 
 
 Section BFPrinting.
@@ -76,6 +174,70 @@ Section BFPrinting.
       | bfc a bf' => append (unparse_bf1 a) (unparse_bf bf')
       end.
 
+  Fixpoint bns_unparse_bf1 (bf1:BF1) : bneststring :=
+    match bf1 with
+    | bf_right => bns_ch ">"
+    | bf_left => bns_ch "<"
+    | bf_inc => bns_ch "+"
+    | bf_dec => bns_ch "-"
+    | bf_out => bns_ch "."
+    | bf_in => bns_ch ","
+    | bf_loop inner => bns_nest (bns_unparse_bf inner)
+    end
+  with
+    bns_unparse_bf (bf:BF) : bneststring :=
+      match bf with
+      | bfz => bns_empty
+      | bfc a bf' => bns_app (bns_unparse_bf1 a) (bns_unparse_bf bf')
+      end.
+
+  Lemma unparse_equal:
+    forall b, unparse_bf b = unparse_bns (bns_unparse_bf b).
+  Proof.
+    induction b using bf_mut
+    with (P:=fun b => unparse_bf b = unparse_bns (bns_unparse_bf b))
+           (P0:=fun b => unparse_bf (bfc b bfz) = unparse_bns (bns_unparse_bf1 b)).
+    all: try solve [cbn; auto].
+    cbn in IHb; rewrite append_nil_r in IHb.
+    cbn; rewrite IHb; now rewrite IHb0.
+    replace (unparse_bns (bns_unparse_bf1 (bf_loop b))) with (("[" ++ unparse_bf b ++ "]")%string).
+    cbn; now rewrite append_nil_r.
+    simpl; now rewrite <- IHb.
+  Qed.
+
+
+  Function make_bns s bns l :=
+    match s with
+    | String "[" s => make_bns s bns_empty (bns :: l)
+    | String "]" s => match l with
+                      | bx :: l => make_bns s (bns_app bx (bns_nest bns)) l
+                      | [] => None
+                      end
+    | String ch s => make_bns s (bns_app (bns_ch ch) bns) l
+    | ""%string => match l with
+                   | bx :: l => None
+                   | [] => Some bns
+                   end
+    end.
+
+  Lemma make_bns_suffix s b l b':
+    make_bns s b l = Some b' -> exists s', unparse_bns b' = (s' ++ s)%string.
+    revert b l b'; induction s; cbn; intros.
+    exists (unparse_bns b'); now rewrite append_nil_r.
+    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3.
+    apply IHs in H.
+    destruct H as [s' H].
+
+  Lemma make_bns_correct s b:
+    make_bns s bns_empty [] = Some b -> unparse_bns b = s.
+    revert b; induction s; cbn; intros.
+    inversion H; subst; now cbn.
+    simpl; intros.
+    forall bns,
+    
+
+
   Example print_all_bf_commands:
     unparse_bf
       (bfc (bf_loop
@@ -89,6 +251,30 @@ End BFPrinting.
 
 Section BFParsing.
 
+  Fixpoint parse_bns_bf (s:bneststring) : BF :=
+    match s with
+    | bns_empty => bfz
+    | bns_ch ">" => bfc bf_right bfz
+    | bns_ch "<" => bfc bf_left bfz
+    | bns_ch "+" => bfc bf_inc bfz
+    | bns_ch "-" => bfc bf_dec bfz
+    | bns_ch "." => bfc bf_out bfz
+    | bns_ch "," => bfc bf_in bfz
+    | bns_ch _ => bfz
+    | bns_app s1 s2 => bfapp (parse_bns_bf s1) (parse_bns_bf s2)
+    | bns_nest s => bfc (bf_loop (parse_bns_bf s)) bfz
+    end.
+
+  Definition parse_bf (s:string) : option BF :=
+    match make_bns s bns_empty [] with
+    | Some s => Some (parse_bns_bf s)
+    | None => None
+    end.
+
+  
+
+  
+
   Definition otherch : ascii -> Prop :=
     fun a =>
       match a with
@@ -97,7 +283,6 @@ Section BFParsing.
       end%char.
 
 
-  (*
   Function parse_bf' (s:string) (b:BF) (l:list BF)
   : option BF :=
     match s with
@@ -123,7 +308,118 @@ Section BFParsing.
   Definition parse_bf (s:string) : option BF :=
     parse_bf' s bfz [].
   Hint Resolve parse_bf.
-*)
+
+
+  Lemma parse_bf'_app:
+    forall s1 b1 l1 b s2,
+      parse_bf' s1 b1 l1 = Some b ->
+      parse_bf' (s1 ++ s2) b1 l1 = parse_bf' s2 b [].
+  Proof.
+    induction s1; intros.
+    destruct l1; cbn in *; inversion H; now subst.
+    cbn in H.
+    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3.
+    all: try solve [cbn; now apply IHs1].
+    all: destruct a4, a5, a6, a7.
+    all: try solve [cbn; now apply IHs1].
+    destruct l1; try discriminate.
+    cbn; now apply IHs1.
+  Qed.
+
+  Lemma parse_bf'_empty:
+    forall s b b',
+      parse_bf' s bfz [] = Some b ->
+      parse_bf' s b' [] = Some (bfapp b' b).
+    induction s; intros.
+    cbn in *; inversion H; subst.
+    now rewrite bfapp_bfz_r.
+
+    cbn in H.
+    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3.
+    all: try solve [cbn; now apply IHs with (b:=b)].
+    all: destruct a4, a5, a6, a7.
+    all: try solve [cbn; now apply IHs with (b:=b)].
+    Focus 2.
+    apply IHs in H. destruct H as [bn [H H0]].
+    exists (bfc bf_inc bn).
+    cbn.
+      parse_bf' s b [] = bfapp b (parse_bf' s bfz []).
+
+  Lemma parse_bf_app:
+    forall s1 s2 b1 b2,
+      parse_bf s1 = Some b1 ->
+      parse_bf s2 = Some b2 ->
+      parse_bf (s1 ++ s2) = Some (bfapp b1 b2).
+    induction s1; intros.
+    cbn in *; inversion H; subst; now rewrite bfapp_bfz_l.
+
+  Lemma parse_bf'_app:
+    forall s1 bf bf' s2 l,
+      parse_bf s1 = Some bf' ->
+      parse_bf' (s1 ++ s2) bf l = parse_bf' s2 (bfapp bf bf') l.
+    induction s1; intros.
+    cbn in *; inversion H; subst; now rewrite bfapp_bfz_r.
+    cbn in *. now apply IHs1.
+  Qed.
+
+
+  Lemma bnest_parseable:
+    forall s, bneststring s -> exists b, parse_bf s = Some b.
+  Proof.
+    intros s BN; induction BN.
+    - exists bfz; now cbn.
+    - destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
+      destruct b0, b1, b2, b3.
+      all: try solve [exists bfz; now cbn].
+      all: destruct b4, b5, b6, b7.
+      all: try solve [exists bfz; now cbn].
+      1: exists (bfc bf_inc bfz).
+      2: exists (bfc bf_dec bfz).
+      3: exists (bfc bf_right bfz).
+      4: exists (bfc bf_out bfz).
+      5: exists (bfc bf_left bfz).
+      6: exists (bfc bf_in bfz).
+      all: now cbn.
+    -
+      all: ( exists (bfc bf_inc bfz) | exists (bfc bf_dec bfz) |
+                   exists (bfc bf_right bfz) | exists (bfc bf_out bfz) |
+                   exists (bfc bf_left bfz) | exists (bfc bf_in bfz) ].
+  Lemma parse_bf_bnest_app:
+    forall s, bneststring s ->
+              forall b, parse_bf s = Some b ->
+                        forall s' b' l, parse_bf' (s ++ s') b' l = parse_bf' s' (bfapp b' b) l.
+  Proof.
+    intros s BN; induction BN; intros b P s' b' l; cbn in P.
+    - inversion P; subst; now rewrite bfapp_bfz_r.
+    - destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
+      destruct b0, b1, b2, b3.
+      all: try solve [inversion P; subst; now rewrite bfapp_bfz_r].
+      all: destruct b4, b5, b6, b7.
+      all: try solve [inversion P; subst; now rewrite bfapp_bfz_r].
+      all: try solve [inversion P; subst; now rewrite bfapp_singleton_r].
+    - 
+      
+  Lemma parse_bf_bnest:
+    forall s, (exists b, parse_bf s = Some b) <-> bneststring s.
+  Proof.
+    split.
+    - admit.
+    - intro BN; induction BN.
+      + exists bfz; now cbn.
+      + destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
+        destruct b0, b1, b2, b3, b4, b5, b6, b7.
+        all: try solve [exists bfz; cbn; reflexivity].
+        1, 3: contradiction.
+        exists (bfc bf_inc bfz); now cbn.
+        exists (bfc bf_dec bfz); now cbn.
+        exists (bfc bf_right bfz); now cbn.
+        exists (bfc bf_out bfz); now cbn.
+        exists (bfc bf_left bfz); now cbn.
+        exists (bfc bf_in bfz); now cbn.
+      + destruct IHBN
+                  1: 
 
   Inductive BFParse :=
   | bfp : BF -> list BF -> bool -> BFParse.
@@ -146,32 +442,6 @@ Section BFParsing.
                       substring (length s - l) l s)
     | None => None
     end.
-
-  Lemma substring_empty:
-    forall n s, substring n 0 s = ""%string.
-    induction n; cbn.
-    destruct s; auto.
-    intros; destruct s; cbn; auto.
-  Qed.
-
-  Lemma substring_length_1:
-    forall s m, length (substring 0 m s) = min m (length s).
-    induction s; induction m.
-    1-3: now cbn.
-    simpl; now rewrite IHs.
-  Qed.
-
-  Lemma substring_length:
-    forall s n m, length (substring n m s) = min m (length s - n).
-    induction s; induction n; induction m.
-    1-5: now cbn.
-    cbn; now rewrite substring_length_1.
-    cbn; rewrite IHs; now cbn.
-    cbn; rewrite IHs.
-    remember (length s - n) as lsn; destruct lsn.
-    now cbn.
-    rewrite Nat.succ_min_distr; auto.
-  Qed.
 
   Lemma skip_brackets'_length:
     forall s n x, skip_brackets' s n = Some x -> x < length s.
@@ -206,14 +476,15 @@ Section BFParsing.
   now cbn. Qed.
 
 
-  Function parse_bf' (s:string) (b:BF) { measure length s }: option BF :=
+  (*
+  Fixpoint parse_bf' (s:string) : BF :=
     match s with
-    | String ">" s => parse_bf' s (bfrevc b bf_right)
-    | String "<" s => parse_bf' s (bfrevc b bf_left)
-    | String "+" s => parse_bf' s (bfrevc b bf_inc)
-    | String "-" s => parse_bf' s (bfrevc b bf_dec)
-    | String "." s => parse_bf' s (bfrevc b bf_out)
-    | String "," s => parse_bf' s (bfrevc b bf_in)
+    | String ">" s => bfc bf_right (parse_bf' s)
+    | String "<" s => bfc bf_left (parse_bf' s)
+    | String "+" s => bfc bf_inc (parse_bf' s)
+    | String "-" s => bfc bf_dec (parse_bf' s)
+    | String "." s => bfc bf_out (parse_bf' s)
+    | String "," s => bfc bf_in (parse_bf' s)
     | String "[" s => match skip_brackets s with
                       | Some (s1, s2) =>
                         match parse_bf' s1 bfz with
@@ -224,8 +495,8 @@ Section BFParsing.
                       | None => None
                       end
     | String "]" _ => None
-    | String _ s => parse_bf' s b
-    | ""%string => Some b
+    | String _ s => parse_bf' s
+    | ""%string => bfz
     end.
   all: intros; subst.
   all: try solve [cbn; omega].
@@ -244,13 +515,14 @@ Section BFParsing.
     | bfp b [] true => Some b
     | _ => None
     end.
+   *)
 
   Lemma parse_bf'_app:
-    forall s1 bp bp' s2,
-      parse_bf' s1 bp = bp' ->
-      parse_bf' (s1 ++ s2) bp = parse_bf' s2 bp'.
+    forall s1 bf bf' s2 l,
+      parse_bf s1 = Some bf' ->
+      parse_bf' (s1 ++ s2) bf l = parse_bf' s2 (bfapp bf bf') l.
     induction s1; intros.
-    cbn in *; subst; reflexivity.
+    cbn in *; inversion H; subst; now rewrite bfapp_bfz_r.
     cbn in *. now apply IHs1.
   Qed.
 
