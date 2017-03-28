@@ -145,12 +145,52 @@ Inductive bneststring :=
 | bns_app : bneststring -> bneststring -> bneststring
 | bns_nest : bneststring -> bneststring.
 
+Function parse_bns s bns l :=
+  match s with
+  | String "[" s => parse_bns s bns_empty (bns :: l)
+  | String "]" s => match l with
+                    | bx :: l => parse_bns s (bns_app bx (bns_nest bns)) l
+                    | [] => None
+                    end
+  | String ch s => parse_bns s (bns_app bns (bns_ch ch)) l
+  | ""%string => match l with
+                 | bx :: l => None
+                 | [] => Some bns
+                 end
+  end.
+
 Fixpoint unparse_bns b :=
   match b with
   | bns_empty => ""%string
   | bns_ch ch => String ch ""
   | bns_app s1 s2 => (unparse_bns s1 ++ unparse_bns s2)%string
   | bns_nest s => String "[" (unparse_bns s ++ "]")
+  end.
+
+Definition is_bfchar a :=
+  match a with
+  | ">" | "<" | "+" | "-" | "." | "," | "[" | "]" => true
+  | _ => false
+  end%char.
+
+Definition is_bfchar_nb a :=
+  match a with
+  | ">" | "<" | "+" | "-" | "." | "," => true
+  | _ => false
+  end%char.
+
+Fixpoint min_unparse_bns b :=
+  match b with
+  | bns_empty => ""%string
+  | bns_ch ch => if is_bfchar_nb ch then String ch "" else ""%string
+  | bns_app s1 s2 => (min_unparse_bns s1 ++ min_unparse_bns s2)%string
+  | bns_nest s => String "[" (min_unparse_bns s ++ "]")
+  end.
+
+Fixpoint strip_nonbfchar s :=
+  match s with
+  | String ch s => if is_bfchar ch then String ch (strip_nonbfchar s) else strip_nonbfchar s
+  | ""%string => s
   end.
 
 
@@ -206,38 +246,6 @@ Section BFPrinting.
   Qed.
 
 
-  Function make_bns s bns l :=
-    match s with
-    | String "[" s => make_bns s bns_empty (bns :: l)
-    | String "]" s => match l with
-                      | bx :: l => make_bns s (bns_app bx (bns_nest bns)) l
-                      | [] => None
-                      end
-    | String ch s => make_bns s (bns_app (bns_ch ch) bns) l
-    | ""%string => match l with
-                   | bx :: l => None
-                   | [] => Some bns
-                   end
-    end.
-
-  Lemma make_bns_suffix s b l b':
-    make_bns s b l = Some b' -> exists s', unparse_bns b' = (s' ++ s)%string.
-    revert b l b'; induction s; cbn; intros.
-    exists (unparse_bns b'); now rewrite append_nil_r.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    apply IHs in H.
-    destruct H as [s' H].
-
-  Lemma make_bns_correct s b:
-    make_bns s bns_empty [] = Some b -> unparse_bns b = s.
-    revert b; induction s; cbn; intros.
-    inversion H; subst; now cbn.
-    simpl; intros.
-    forall bns,
-    
-
-
   Example print_all_bf_commands:
     unparse_bf
       (bfc (bf_loop
@@ -266,272 +274,33 @@ Section BFParsing.
     end.
 
   Definition parse_bf (s:string) : option BF :=
-    match make_bns s bns_empty [] with
+    match parse_bns s bns_empty [] with
     | Some s => Some (parse_bns_bf s)
     | None => None
     end.
 
-  
-
-  
-
-  Definition otherch : ascii -> Prop :=
-    fun a =>
-      match a with
-      | ">" | "<" | "+" | "-" | "." | "," | "[" | "]" => False
-      | _ => True
-      end%char.
-
-
-  Function parse_bf' (s:string) (b:BF) (l:list BF)
-  : option BF :=
-    match s with
-    | ""%string => match l with
-                   | [] => Some b
-                   | _ => None
-                   end
-    | String ">" s => parse_bf' s (bfrevc b bf_right) l
-    | String "<" s => parse_bf' s (bfrevc b bf_left) l
-    | String "+" s => parse_bf' s (bfrevc b bf_inc) l
-    | String "-" s => parse_bf' s (bfrevc b bf_dec) l
-    | String "." s => parse_bf' s (bfrevc b bf_out) l
-    | String "," s => parse_bf' s (bfrevc b bf_in) l
-    | String "[" s => parse_bf' s bfz (b :: l)
-    | String "]" s => match l with
-                      | [] => None
-                      | bx :: l' =>
-                        parse_bf' s (bfrevc bx (bf_loop b)) l'
-                      end
-    | String _ s => parse_bf' s b l
-    end.
-
-  Definition parse_bf (s:string) : option BF :=
-    parse_bf' s bfz [].
-  Hint Resolve parse_bf.
-
-
-  Lemma parse_bf'_app:
-    forall s1 b1 l1 b s2,
-      parse_bf' s1 b1 l1 = Some b ->
-      parse_bf' (s1 ++ s2) b1 l1 = parse_bf' s2 b [].
+  Lemma bfapp_unparse:
+    forall b1 b2, unparse_bns (bns_unparse_bf (bfapp b1 b2)) =
+                  (unparse_bns (bns_unparse_bf b1) ++ unparse_bns (bns_unparse_bf b2))%string.
+    induction b1; intros.
+    - now cbn.
+    - simpl; rewrite IHb1; now rewrite append_assoc.
+  Qed.
+ 
+  Lemma parse_bns_bf_correct (s:bneststring):
+    unparse_bns (bns_unparse_bf (parse_bns_bf s)) = min_unparse_bns s.
   Proof.
-    induction s1; intros.
-    destruct l1; cbn in *; inversion H; now subst.
-    cbn in H.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [cbn; now apply IHs1].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [cbn; now apply IHs1].
-    destruct l1; try discriminate.
-    cbn; now apply IHs1.
+    induction s.
+    - cbn; auto.
+    - cbn; destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3.
+      all: try solve [now cbn].
+      all: destruct a4, a5, a6, a7.
+      all: try solve [now cbn].
+    - cbn; rewrite bfapp_unparse; rewrite IHs1; now rewrite IHs2.
+    - simpl; rewrite IHs; now rewrite append_nil_r.
   Qed.
 
-  Lemma parse_bf'_empty:
-    forall s b b',
-      parse_bf' s bfz [] = Some b ->
-      parse_bf' s b' [] = Some (bfapp b' b).
-    induction s; intros.
-    cbn in *; inversion H; subst.
-    now rewrite bfapp_bfz_r.
-
-    cbn in H.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [cbn; now apply IHs with (b:=b)].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [cbn; now apply IHs with (b:=b)].
-    Focus 2.
-    apply IHs in H. destruct H as [bn [H H0]].
-    exists (bfc bf_inc bn).
-    cbn.
-      parse_bf' s b [] = bfapp b (parse_bf' s bfz []).
-
-  Lemma parse_bf_app:
-    forall s1 s2 b1 b2,
-      parse_bf s1 = Some b1 ->
-      parse_bf s2 = Some b2 ->
-      parse_bf (s1 ++ s2) = Some (bfapp b1 b2).
-    induction s1; intros.
-    cbn in *; inversion H; subst; now rewrite bfapp_bfz_l.
-
-  Lemma parse_bf'_app:
-    forall s1 bf bf' s2 l,
-      parse_bf s1 = Some bf' ->
-      parse_bf' (s1 ++ s2) bf l = parse_bf' s2 (bfapp bf bf') l.
-    induction s1; intros.
-    cbn in *; inversion H; subst; now rewrite bfapp_bfz_r.
-    cbn in *. now apply IHs1.
-  Qed.
-
-
-  Lemma bnest_parseable:
-    forall s, bneststring s -> exists b, parse_bf s = Some b.
-  Proof.
-    intros s BN; induction BN.
-    - exists bfz; now cbn.
-    - destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
-      destruct b0, b1, b2, b3.
-      all: try solve [exists bfz; now cbn].
-      all: destruct b4, b5, b6, b7.
-      all: try solve [exists bfz; now cbn].
-      1: exists (bfc bf_inc bfz).
-      2: exists (bfc bf_dec bfz).
-      3: exists (bfc bf_right bfz).
-      4: exists (bfc bf_out bfz).
-      5: exists (bfc bf_left bfz).
-      6: exists (bfc bf_in bfz).
-      all: now cbn.
-    -
-      all: ( exists (bfc bf_inc bfz) | exists (bfc bf_dec bfz) |
-                   exists (bfc bf_right bfz) | exists (bfc bf_out bfz) |
-                   exists (bfc bf_left bfz) | exists (bfc bf_in bfz) ].
-  Lemma parse_bf_bnest_app:
-    forall s, bneststring s ->
-              forall b, parse_bf s = Some b ->
-                        forall s' b' l, parse_bf' (s ++ s') b' l = parse_bf' s' (bfapp b' b) l.
-  Proof.
-    intros s BN; induction BN; intros b P s' b' l; cbn in P.
-    - inversion P; subst; now rewrite bfapp_bfz_r.
-    - destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
-      destruct b0, b1, b2, b3.
-      all: try solve [inversion P; subst; now rewrite bfapp_bfz_r].
-      all: destruct b4, b5, b6, b7.
-      all: try solve [inversion P; subst; now rewrite bfapp_bfz_r].
-      all: try solve [inversion P; subst; now rewrite bfapp_singleton_r].
-    - 
-      
-  Lemma parse_bf_bnest:
-    forall s, (exists b, parse_bf s = Some b) <-> bneststring s.
-  Proof.
-    split.
-    - admit.
-    - intro BN; induction BN.
-      + exists bfz; now cbn.
-      + destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
-        destruct b0, b1, b2, b3, b4, b5, b6, b7.
-        all: try solve [exists bfz; cbn; reflexivity].
-        1, 3: contradiction.
-        exists (bfc bf_inc bfz); now cbn.
-        exists (bfc bf_dec bfz); now cbn.
-        exists (bfc bf_right bfz); now cbn.
-        exists (bfc bf_out bfz); now cbn.
-        exists (bfc bf_left bfz); now cbn.
-        exists (bfc bf_in bfz); now cbn.
-      + destruct IHBN
-                  1: 
-
-  Inductive BFParse :=
-  | bfp : BF -> list BF -> bool -> BFParse.
-
-  Notation bfpf := (BF -> option string -> option BF).
-
-
-  Function skip_brackets' (s:string) (n:nat) : option nat :=
-    match s, n with
-    | String "]" s, 0 => Some (length s)
-    | String "]" s, S n => skip_brackets' s n
-    | String "[" s, n => skip_brackets' s (S n)
-    | String _ s, n => skip_brackets' s n
-    | ""%string, _ => None
-    end.
-
-  Definition skip_brackets s : option (string * string) :=
-    match skip_brackets' s 0 with
-    | Some l => Some (substring 0 (length s - l - 1) s,
-                      substring (length s - l) l s)
-    | None => None
-    end.
-
-  Lemma skip_brackets'_length:
-    forall s n x, skip_brackets' s n = Some x -> x < length s.
-    intros s n; functional induction (skip_brackets' s n).
-    intros; inversion H; subst; cbn; omega.
-    1-3: intros; apply IHo in H; cbn; omega.
-    intros; discriminate.
-  Qed.
-
-  Lemma skip_brackets_length:
-    forall s s1 s2, skip_brackets s = Some (s1, s2) ->
-                    length s = length s1 + length s2 + 1.
-    intros; unfold skip_brackets in H.
-    remember (skip_brackets' s 0) as sb; destruct sb; try discriminate.
-    inversion H; subst.
-    symmetry in Heqsb; apply skip_brackets'_length in Heqsb.
-    repeat rewrite substring_length.
-    replace (length s - (length s - n)) with n by omega.
-    replace (length s - 0) with (length s) by omega.
-    rewrite Min.min_idempotent.
-    replace (Nat.min (length s - n - 1) (length s)) with (length s - n - 1).
-    omega.
-    assert (length s - n - 1 <= length s) by omega.
-    now rewrite Min.min_l.
-  Qed.
-
-  Example skip_brackets1:
-    (skip_brackets "]" = Some ("", "")
-     /\ skip_brackets "abc]def" = Some ("abc", "def")
-     /\ skip_brackets "a[[][c]]d]e" = Some ("a[[][c]]d", "e")
-    )%string.
-  now cbn. Qed.
-
-
-  (*
-  Fixpoint parse_bf' (s:string) : BF :=
-    match s with
-    | String ">" s => bfc bf_right (parse_bf' s)
-    | String "<" s => bfc bf_left (parse_bf' s)
-    | String "+" s => bfc bf_inc (parse_bf' s)
-    | String "-" s => bfc bf_dec (parse_bf' s)
-    | String "." s => bfc bf_out (parse_bf' s)
-    | String "," s => bfc bf_in (parse_bf' s)
-    | String "[" s => match skip_brackets s with
-                      | Some (s1, s2) =>
-                        match parse_bf' s1 bfz with
-                        | Some bfn =>
-                          parse_bf' s2 (bfrevc b (bf_loop bfn))
-                        | None => None
-                        end
-                      | None => None
-                      end
-    | String "]" _ => None
-    | String _ s => parse_bf' s
-    | ""%string => bfz
-    end.
-  all: intros; subst.
-  all: try solve [cbn; omega].
-  all: apply skip_brackets_length in teq9.
-  all: cbn; rewrite teq9; omega.
-  Qed.
-
-  Fixpoint parse_bf' s bp :=
-    match s with
-    | "" => bp
-    | String ch s => parse_bf' s (parse_bfch ch bp)
-    end%string.
-
-  Definition parse_bf s :=
-    match parse_bf' s (bfp bfz [] true) with
-    | bfp b [] true => Some b
-    | _ => None
-    end.
-   *)
-
-  Lemma parse_bf'_app:
-    forall s1 bf bf' s2 l,
-      parse_bf s1 = Some bf' ->
-      parse_bf' (s1 ++ s2) bf l = parse_bf' s2 (bfapp bf bf') l.
-    induction s1; intros.
-    cbn in *; inversion H; subst; now rewrite bfapp_bfz_r.
-    cbn in *. now apply IHs1.
-  Qed.
-
-  Lemma parse_bf_back:
-    forall l b s1 bf,
-      parse_bf s1 = Some bf ->
-      parse_bf' s1 (bfp b l true) = bfp (bfapp b bf) l true.
-    induction s1.
-    admit.
     
   Example parse_all_bf_commands:
     parse_bf "[><+-.,]" =
