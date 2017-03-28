@@ -128,19 +128,110 @@ Section BFParsing.
   Inductive BFParse :=
   | bfp : BF -> list BF -> bool -> BFParse.
 
-  Definition parse_bfch (ch:ascii) (bp:BFParse) : BFParse :=
-    match ch, bp with
-    | ">", bfp b l ok => bfp (bfrevc b bf_right) l ok
-    | "<", bfp b l ok => bfp (bfrevc b bf_left) l ok
-    | "+", bfp b l ok => bfp (bfrevc b bf_inc) l ok
-    | "-", bfp b l ok => bfp (bfrevc b bf_dec) l ok 
-    | ".", bfp b l ok => bfp (bfrevc b bf_out) l ok
-    | ",", bfp b l ok => bfp (bfrevc b bf_in) l ok
-    | "[", bfp b l ok => bfp bfz (b :: l) ok
-    | "]", bfp b (bx :: l) ok => bfp (bfrevc bx (bf_loop b)) l ok
-    | "]", bfp b [] _ => bfp b [] false
-    | _, _ => bp
-    end%char.
+  Notation bfpf := (BF -> option string -> option BF).
+
+
+  Function skip_brackets' (s:string) (n:nat) : option nat :=
+    match s, n with
+    | String "]" s, 0 => Some (length s)
+    | String "]" s, S n => skip_brackets' s n
+    | String "[" s, n => skip_brackets' s (S n)
+    | String _ s, n => skip_brackets' s n
+    | ""%string, _ => None
+    end.
+
+  Definition skip_brackets s : option (string * string) :=
+    match skip_brackets' s 0 with
+    | Some l => Some (substring 0 (length s - l - 1) s,
+                      substring (length s - l) l s)
+    | None => None
+    end.
+
+  Lemma substring_empty:
+    forall n s, substring n 0 s = ""%string.
+    induction n; cbn.
+    destruct s; auto.
+    intros; destruct s; cbn; auto.
+  Qed.
+
+  Lemma substring_length_1:
+    forall s m, length (substring 0 m s) = min m (length s).
+    induction s; induction m.
+    1-3: now cbn.
+    simpl; now rewrite IHs.
+  Qed.
+
+  Lemma substring_length:
+    forall s n m, length (substring n m s) = min m (length s - n).
+    induction s; induction n; induction m.
+    1-5: now cbn.
+    cbn; now rewrite substring_length_1.
+    cbn; rewrite IHs; now cbn.
+    cbn; rewrite IHs.
+    remember (length s - n) as lsn; destruct lsn.
+    now cbn.
+    rewrite Nat.succ_min_distr; auto.
+  Qed.
+
+  Lemma skip_brackets'_length:
+    forall s n x, skip_brackets' s n = Some x -> x < length s.
+    intros s n; functional induction (skip_brackets' s n).
+    intros; inversion H; subst; cbn; omega.
+    1-3: intros; apply IHo in H; cbn; omega.
+    intros; discriminate.
+  Qed.
+
+  Lemma skip_brackets_length:
+    forall s s1 s2, skip_brackets s = Some (s1, s2) ->
+                    length s = length s1 + length s2 + 1.
+    intros; unfold skip_brackets in H.
+    remember (skip_brackets' s 0) as sb; destruct sb; try discriminate.
+    inversion H; subst.
+    symmetry in Heqsb; apply skip_brackets'_length in Heqsb.
+    repeat rewrite substring_length.
+    replace (length s - (length s - n)) with n by omega.
+    replace (length s - 0) with (length s) by omega.
+    rewrite Min.min_idempotent.
+    replace (Nat.min (length s - n - 1) (length s)) with (length s - n - 1).
+    omega.
+    assert (length s - n - 1 <= length s) by omega.
+    now rewrite Min.min_l.
+  Qed.
+
+  Example skip_brackets1:
+    (skip_brackets "]" = Some ("", "")
+     /\ skip_brackets "abc]def" = Some ("abc", "def")
+     /\ skip_brackets "a[[][c]]d]e" = Some ("a[[][c]]d", "e")
+    )%string.
+  now cbn. Qed.
+
+
+  Function parse_bf' (s:string) (b:BF) { measure length s }: option BF :=
+    match s with
+    | String ">" s => parse_bf' s (bfrevc b bf_right)
+    | String "<" s => parse_bf' s (bfrevc b bf_left)
+    | String "+" s => parse_bf' s (bfrevc b bf_inc)
+    | String "-" s => parse_bf' s (bfrevc b bf_dec)
+    | String "." s => parse_bf' s (bfrevc b bf_out)
+    | String "," s => parse_bf' s (bfrevc b bf_in)
+    | String "[" s => match skip_brackets s with
+                      | Some (s1, s2) =>
+                        match parse_bf' s1 bfz with
+                        | Some bfn =>
+                          parse_bf' s2 (bfrevc b (bf_loop bfn))
+                        | None => None
+                        end
+                      | None => None
+                      end
+    | String "]" _ => None
+    | String _ s => parse_bf' s b
+    | ""%string => Some b
+    end.
+  all: intros; subst.
+  all: try solve [cbn; omega].
+  all: apply skip_brackets_length in teq9.
+  all: cbn; rewrite teq9; omega.
+  Qed.
 
   Fixpoint parse_bf' s bp :=
     match s with
@@ -163,7 +254,13 @@ Section BFParsing.
     cbn in *. now apply IHs1.
   Qed.
 
-
+  Lemma parse_bf_back:
+    forall l b s1 bf,
+      parse_bf s1 = Some bf ->
+      parse_bf' s1 (bfp b l true) = bfp (bfapp b bf) l true.
+    induction s1.
+    admit.
+    
   Example parse_all_bf_commands:
     parse_bf "[><+-.,]" =
     Some (bfc (bf_loop
