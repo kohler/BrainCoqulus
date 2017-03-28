@@ -10,45 +10,78 @@ Require Import Coq.Program.Tactics.
 Import ListNotations.
 
 (* BF Program Type *)
-Inductive BF : Set :=
-| bf_end : BF
-| bf_right : BF -> BF (* > *)
-| bf_left : BF -> BF  (* < *)
-| bf_inc : BF -> BF   (* + *)
-| bf_dec : BF -> BF   (* - *)
-| bf_out : BF -> BF   (* . *)
-| bf_in : BF -> BF    (* , *)
-| bf_loop : BF -> BF -> BF.  (* [...] *)
+Inductive BF1 : Set :=
+| bf_right (* > *)
+| bf_left  (* < *)
+| bf_inc   (* + *)
+| bf_dec   (* - *)
+| bf_out   (* . *)
+| bf_in    (* , *)
+| bf_loop : BF -> BF1  (* [...] *)
+with
+BF : Set :=
+| bfz
+| bfc : BF1 -> BF -> BF.
+
+Scheme bf_mut := Induction for BF Sort Prop
+with bf1_mut := Induction for BF1 Sort Prop.
+
+
+Fixpoint bfapp bf1 bf2 :=
+  match bf1 with
+  | bfz => bf2
+  | bfc b bf1' => bfc b (bfapp bf1' bf2)
+  end.
+
+Fixpoint bfrevc bf bf1 :=
+  match bf with
+  | bfz => bfc bf1 bfz
+  | bfc b bf' => bfc b (bfrevc bf' bf1)
+  end.
+
+Lemma bfapp_bfz_l bf:
+  bfapp bfz bf = bf.
+  cbn; auto.
+Qed.
+
+Lemma bfapp_bfz_r bf:
+  bfapp bf bfz = bf.
+  induction bf; cbn; auto.
+  now rewrite IHbf.
+Qed.
+
+Lemma append_nil_r:
+  forall s, (s ++ "" = s)%string.
+  induction s; cbn; try rewrite IHs; auto.
+Qed.
+
 
 Section BFPrinting.
 
-  Function chars_of_bf (bf: BF): list ascii :=
-    match bf with
-    | bf_end => []
-    | bf_right bf' =>  ">"%char :: (chars_of_bf bf')
-    | bf_left bf' => "<"%char :: (chars_of_bf bf')
-    | bf_inc bf' => "+"%char :: (chars_of_bf bf')
-    | bf_dec bf' => "-"%char :: (chars_of_bf bf')
-    | bf_out bf' => "."%char :: (chars_of_bf bf')
-    | bf_in bf' => ","%char :: (chars_of_bf bf')
-    | bf_loop inner bf' =>
-      "["%char :: (chars_of_bf inner) ++ ["]"%char] ++ (chars_of_bf bf')
-    end.
-
-  Function string_of_chars (l: list ascii): string :=
-    match l with
-    | [] => EmptyString
-    | a :: l' => String a (string_of_chars l')
-    end.
-
-  Function print_bf (bf: BF): string :=
-    string_of_chars (chars_of_bf bf).
+  Fixpoint unparse_bf1 (bf1:BF1) : string :=
+    match bf1 with
+    | bf_right => ">"
+    | bf_left => "<"
+    | bf_inc => "+"
+    | bf_dec => "-"
+    | bf_out => "."
+    | bf_in => ","
+    | bf_loop inner =>
+      String "[" (unparse_bf inner) ++ "]"
+    end
+  with
+    unparse_bf (bf:BF) : string :=
+      match bf with
+      | bfz => ""%string
+      | bfc a bf' => append (unparse_bf1 a) (unparse_bf bf')
+      end.
 
   Example print_all_bf_commands:
-    print_bf
-      (bf_loop
-         (bf_right (bf_left (bf_inc (bf_dec (bf_out (bf_in bf_end))))))
-         bf_end)
+    unparse_bf
+      (bfc (bf_loop
+              (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec
+                                                          (bfc bf_out (bfc bf_in bfz)))))))
+      bfz)
     = "[><+-.,]"%string. auto.
   Qed.
 
@@ -56,67 +89,100 @@ End BFPrinting.
 
 Section BFParsing.
 
-  Inductive ParseState: Type :=
-  | parse_ok (cur: BF) (stack: list BF)
-  | parse_error.
+  Definition otherch : ascii -> Prop :=
+    fun a =>
+      match a with
+      | ">" | "<" | "+" | "-" | "." | "," | "[" | "]" => False
+      | _ => True
+      end%char.
 
-  Function parse_bf_state (l: list ascii): ParseState :=
-    match l with
-    | [] => parse_ok bf_end []
-    | hd :: tl =>
-      match parse_bf_state tl with
-      | parse_error => parse_error
-      | parse_ok cur stack =>
-        match hd with
-        | ">"%char => parse_ok (bf_right cur) stack
-        | "<"%char => parse_ok (bf_left cur) stack
-        | "+"%char => parse_ok (bf_inc cur) stack
-        | "-"%char => parse_ok (bf_dec cur) stack
-        | "."%char => parse_ok (bf_out cur) stack
-        | ","%char => parse_ok (bf_in cur) stack
-        | "]"%char => parse_ok bf_end (cur :: stack)
-        | "["%char =>
-          match stack with
-          | [] => parse_error
-          | next :: stack' => parse_ok (bf_loop cur next) stack'
-          end
-        | _ => parse_ok cur stack
-        end
-      end
+
+  (*
+  Function parse_bf' (s:string) (b:BF) (l:list BF)
+  : option BF :=
+    match s with
+    | ""%string => match l with
+                   | [] => Some b
+                   | _ => None
+                   end
+    | String ">" s => parse_bf' s (bfrevc b bf_right) l
+    | String "<" s => parse_bf' s (bfrevc b bf_left) l
+    | String "+" s => parse_bf' s (bfrevc b bf_inc) l
+    | String "-" s => parse_bf' s (bfrevc b bf_dec) l
+    | String "." s => parse_bf' s (bfrevc b bf_out) l
+    | String "," s => parse_bf' s (bfrevc b bf_in) l
+    | String "[" s => parse_bf' s bfz (b :: l)
+    | String "]" s => match l with
+                      | [] => None
+                      | bx :: l' =>
+                        parse_bf' s (bfrevc bx (bf_loop b)) l'
+                      end
+    | String _ s => parse_bf' s b l
     end.
 
-  Function chars_of_string (str: string): list ascii :=
-    match str with
-    | EmptyString => []
-    | String a str' => a :: (chars_of_string str')
+  Definition parse_bf (s:string) : option BF :=
+    parse_bf' s bfz [].
+  Hint Resolve parse_bf.
+*)
+
+  Inductive BFParse :=
+  | bfp : BF -> list BF -> bool -> BFParse.
+
+  Definition parse_bfch (ch:ascii) (bp:BFParse) : BFParse :=
+    match ch, bp with
+    | ">", bfp b l ok => bfp (bfrevc b bf_right) l ok
+    | "<", bfp b l ok => bfp (bfrevc b bf_left) l ok
+    | "+", bfp b l ok => bfp (bfrevc b bf_inc) l ok
+    | "-", bfp b l ok => bfp (bfrevc b bf_dec) l ok 
+    | ".", bfp b l ok => bfp (bfrevc b bf_out) l ok
+    | ",", bfp b l ok => bfp (bfrevc b bf_in) l ok
+    | "[", bfp b l ok => bfp bfz (b :: l) ok
+    | "]", bfp b (bx :: l) ok => bfp (bfrevc bx (bf_loop b)) l ok
+    | "]", bfp b [] _ => bfp b [] false
+    | _, _ => bp
+    end%char.
+
+  Fixpoint parse_bf' s bp :=
+    match s with
+    | "" => bp
+    | String ch s => parse_bf' s (parse_bfch ch bp)
+    end%string.
+
+  Definition parse_bf s :=
+    match parse_bf' s (bfp bfz [] true) with
+    | bfp b [] true => Some b
+    | _ => None
     end.
 
-  Function parse_bf (str: string): option BF :=
-    match parse_bf_state (chars_of_string str) with
-    | parse_error => None
-    | parse_ok _ (_ :: _) => None
-    | parse_ok bf [] => Some bf
-    end.
+  Lemma parse_bf'_app:
+    forall s1 bp bp' s2,
+      parse_bf' s1 bp = bp' ->
+      parse_bf' (s1 ++ s2) bp = parse_bf' s2 bp'.
+    induction s1; intros.
+    cbn in *; subst; reflexivity.
+    cbn in *. now apply IHs1.
+  Qed.
+
 
   Example parse_all_bf_commands:
     parse_bf "[><+-.,]" =
-    Some (bf_loop
-            (bf_right (bf_left (bf_inc (bf_dec (bf_out (bf_in bf_end))))))
-            bf_end).
-  auto. Qed.
+    Some (bfc (bf_loop
+                 (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec (bfc bf_out (bfc bf_in bfz))))))) bfz).
+  now cbn. Qed.
 
   Example parse_nesting_bf:
     parse_bf "[[[][]]][]" =
-    Some (bf_loop
-            (bf_loop
-               (bf_loop bf_end (bf_loop bf_end bf_end))
-               bf_end)
-            (bf_loop bf_end bf_end)).
-  auto. Qed.
+    Some (bfc
+            (bf_loop (bfc
+                        (bf_loop (bfc
+                                    (bf_loop bfz)
+                                    (bfc (bf_loop bfz) bfz))) bfz))
+            (bfc (bf_loop bfz) bfz)).
+  now cbn. Qed.
 
   Example parse_empty_bf:
-    parse_bf EmptyString = Some bf_end.
-  auto. Qed.
+    parse_bf EmptyString = Some bfz.
+  now cbn. Qed.
 
   Example parse_bf_bad_left:
     parse_bf "[[]" = None.
@@ -128,6 +194,43 @@ Section BFParsing.
 
 End BFParsing.
 
+
+Check bf_mut.
+
+Lemma unparse_bf_cons bf1 bf:
+  unparse_bf (bfc bf1 bf) = (unparse_bf1 bf1 ++ unparse_bf bf)%string.
+  induction bf; cbn; reflexivity.
+Qed.
+
+Lemma unparse_bf1_eq bf1:
+  unparse_bf (bfc bf1 bfz) = unparse_bf1 bf1.
+  simpl; rewrite append_nil_r; auto.
+Qed.
+
+Lemma bf_parse_inv:
+  forall bf, parse_bf (unparse_bf bf) = Some bf.
+  induction bf using bf_mut
+  with (P:=fun b => parse_bf (unparse_bf b) = Some b)
+         (P0:=fun b => parse_bf (unparse_bf (bfc b bfz)) = Some (bfc b bfz)).
+  1, 3-8: cbn; auto.
+
+  rewrite unparse_bf_cons.
+  unfold parse_bf in *.
+  rewrite parse_bf'_app with (bp':=bfp (bfc b bfz) [] true).
+  replace (unparse_bf bf) with ((unparse_bf bf ++ "")%string).
+  rewrite parse_bf'_app with (bp':=bfp (bfapp (bfc b bfz) bf) [] true); auto.
+  cbn.
+  rewrite bfapp_bfz; now cbn.
+  now rewrite append_nil_r.
+
+  unfold unparse_bf; fold unparse_bf.
+  unfold parse_bf; cbn.
+  rewrite parse_bf'_app2 with (bs:=bf); auto.
+  cbn.
+  now rewrite bfapp_bfz.
+Qed.
+
+
 Lemma bf_print_parse_loop (bf1 bf2: BF):
   forall bf1' bf2',
     parse_bf_state (chars_of_bf bf1) = parse_ok bf1' [] ->
@@ -136,6 +239,8 @@ Lemma bf_print_parse_loop (bf1 bf2: BF):
                                   ++ (chars_of_bf bf2))
     = parse_ok (bf_loop bf1 bf2) [].
 Proof.
+  intros.
+  cbn.
 Admitted.
 
 Lemma bf_print_parse_chars_inv (bf: BF):
@@ -292,5 +397,5 @@ Function interpret_bf_readable (prog: string) (input: string) (f:nat): string :=
 Example hello_world_bf:
   interpret_bf_readable "++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.
                         +++++++..+++.>++.<<+++++++++++++++.>.+++.------.
-                        --------.>+. newline in next cell" "" 401 =
+                        --------.>+. newline in next cell" "" 399 =
   "Hello World!"%string. auto.
