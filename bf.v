@@ -124,9 +124,15 @@ Section StringFacts.
 
   Lemma append_tail:
     forall s1 s2 s, s1 = s2 -> s1 ++ s = s2 ++ s.
+  Proof.
     intros; now subst.
   Qed.
 
+  Lemma append_ch_nonempty:
+    forall s1 ch s2, s1 ++ String ch s2 <> "".
+  Proof.
+    destruct s1; cbn; congruence.
+  Qed.
 
   Lemma substring_empty:
     forall n s, substring n 0 s = ""%string.
@@ -545,11 +551,54 @@ Section StringNesting.
 
   (* If the input string is correctly nested,
      then the output of [split_nest] is correct. *)
+  Inductive split_nest_word : string -> Prop :=
+  | snw_ch : forall ch, split_nest_word (String ch "")
+  | snw_bracket : forall s, split_nest_word (String "[" s).
+  Hint Constructors split_nest_word.
+
+  Lemma split_nest'_all_words:
+    forall s n x wx w,
+      In w (split_nest' s n x) ->
+      (x = ""%string /\ n = 0 \/ x = String "[" wx) ->
+      split_nest_word w.
+  Proof.
+    intros s n x; functional induction (split_nest' s n x); intros wx w I X.
+    - destruct X as [[X N] | X].
+      + apply (IHl ""%string w); auto.
+        right; now subst.
+      + apply (IHl (wx ++ "[")%string w); auto.
+        right; now subst.
+    - destruct X as [[X N] | X].
+      + apply (IHl ""%string w); auto.
+        right; now subst.
+      + apply (IHl (wx ++ "[")%string w); auto.
+        right; now subst.
+    - destruct I.
+      + destruct X as [[X N] | X]; subst; constructor.
+      + destruct X as [[X N] | X]; apply (IHl wx w); auto.
+    - destruct X as [[X N] | X].
+      + discriminate.
+      + apply (IHl (wx ++ "]")%string w); auto.
+        right; now subst.
+    - destruct I.
+      + destruct X as [[X N] | X]; subst; constructor.
+      + destruct X as [[X N] | X]; apply (IHl wx w); auto.
+    - destruct X as [[X N] | X].
+      + discriminate.
+      + apply (IHl (wx ++ String ch "") w)%string; auto.
+        right; now subst.
+    - destruct I.
+    - destruct X as [[X N] | X].
+      + contradiction.
+      + destruct I as [I | []]; subst; constructor.
+  Qed.
+      
   Lemma split_nest'_correct:
-    forall s n x, (x = ""%string \/ n > 0) ->
-                  string_prenest_check' x 0 = n ->
-                  string_nest_check (x ++ s) ->
-                  split_nest_check (split_nest' s n x).
+    forall s n x,
+      (x = ""%string \/ n > 0) ->
+      string_prenest_check' x 0 = n ->
+      string_nest_check (x ++ s) ->
+      split_nest_check (split_nest' s n x).
   Proof.
     intros s n x P; functional induction (split_nest' s n x); intros;
       unfold string_prenest_check in *.
@@ -640,10 +689,178 @@ Section StringNesting.
     - now cbn.
   Qed.
 
+  (* NB should also show that non-bracketed groups are a single character long *)
+
 End StringNesting.
+
+Section BFPrinting.
+
+  Fixpoint unparse_bf1 (bf1:BF1) : string :=
+    match bf1 with
+    | bf_right => ">"
+    | bf_left => "<"
+    | bf_inc => "+"
+    | bf_dec => "-"
+    | bf_out => "."
+    | bf_in => ","
+    | bf_loop inner =>
+      String "[" (unparse_bf inner) ++ "]"
+    end
+  with
+    unparse_bf (bf:BF) : string :=
+      match bf with
+      | bfz => ""%string
+      | bfc a bf' => append (unparse_bf1 a) (unparse_bf bf')
+      end.
+
+  Example print_all_bf_commands:
+    unparse_bf
+      (bfc (bf_loop
+              (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec
+                                                          (bfc bf_out (bfc bf_in bfz)))))))
+      bfz)
+    = "[><+-.,]"%string. auto.
+  Qed.
+
+End BFPrinting.
+
+Section BFParsing.
+
+  Definition is_bfchar a :=
+    match a with
+    | ">" | "<" | "+" | "-" | "." | "," | "[" | "]" => true
+    | _ => false
+    end%char.
+
+  Definition is_bfchar_nb a :=
+    match a with
+    | ">" | "<" | "+" | "-" | "." | "," => true
+    | _ => false
+    end%char.
+
+  Fixpoint strip_nonbfchar s :=
+    match s with
+    | String ch s => if is_bfchar ch then String ch (strip_nonbfchar s) else strip_nonbfchar s
+    | ""%string => s
+    end.
+
+  Function parse_split_bf (l:list string) {measure sconcat_length l} : BF :=
+    match l with
+    | [] => bfz
+    | ">" :: l => bfc bf_right (parse_split_bf l)
+    | "<" :: l => bfc bf_left (parse_split_bf l)
+    | "+" :: l => bfc bf_inc (parse_split_bf l)
+    | "-" :: l => bfc bf_dec (parse_split_bf l)
+    | "." :: l => bfc bf_out (parse_split_bf l)
+    | "," :: l => bfc bf_in (parse_split_bf l)
+    | (String "[" _) as s :: l =>
+      let bn := parse_split_bf (split_nest (substring 1 (length s - 2) s)) in
+      bfc (bf_loop bn) (parse_split_bf l)
+    | "" :: l => bfz
+    | _ :: l => parse_split_bf l
+    end%string.
+  Proof.
+    all: intros; try solve [cbn; omega].
+  
+  Fixpoint parse_bns_bf (s:bneststring) : BF :=
+    match s with
+    | bns_empty => bfz
+    | bns_ch ">" => bfc bf_right bfz
+    | bns_ch "<" => bfc bf_left bfz
+    | bns_ch "+" => bfc bf_inc bfz
+    | bns_ch "-" => bfc bf_dec bfz
+    | bns_ch "." => bfc bf_out bfz
+    | bns_ch "," => bfc bf_in bfz
+    | bns_ch _ => bfz
+    | bns_app s1 s2 => bfapp (parse_bns_bf s1) (parse_bns_bf s2)
+    | bns_nest s => bfc (bf_loop (parse_bns_bf s)) bfz
+    end.
+
+  Definition parse_bf (s:string) : option BF :=
+    match parse_bns s bns_empty [] with
+    | Some s => Some (parse_bns_bf s)
+    | None => None
+    end.
+
+  Lemma bfapp_unparse:
+    forall b1 b2, unparse_bns (bns_unparse_bf (bfapp b1 b2)) =
+                  (unparse_bns (bns_unparse_bf b1) ++ unparse_bns (bns_unparse_bf b2))%string.
+    induction b1; intros.
+    - now cbn.
+    - simpl; rewrite IHb1; now rewrite append_assoc.
+  Qed.
+ 
+  Lemma parse_bns_bf_correct (s:bneststring):
+    unparse_bns (bns_unparse_bf (parse_bns_bf s)) = min_unparse_bns s.
+  Proof.
+    induction s.
+    - cbn; auto.
+    - cbn; destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3.
+      all: try solve [now cbn].
+      all: destruct a4, a5, a6, a7.
+      all: try solve [now cbn].
+    - cbn; rewrite bfapp_unparse; rewrite IHs1; now rewrite IHs2.
+    - simpl; rewrite IHs; now rewrite append_nil_r.
+  Qed.
+
+    
+  Example parse_all_bf_commands:
+    parse_bf "[><+-.,]" =
+    Some (bfc (bf_loop
+                 (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec (bfc bf_out (bfc bf_in bfz))))))) bfz).
+  now cbn. Qed.
+
+  Example parse_nesting_bf:
+    parse_bf "[[[][]]][]" =
+    Some (bfc
+            (bf_loop (bfc
+                        (bf_loop (bfc
+                                    (bf_loop bfz)
+                                    (bfc (bf_loop bfz) bfz))) bfz))
+            (bfc (bf_loop bfz) bfz)).
+  now cbn. Qed.
+
+  Example parse_empty_bf:
+    parse_bf EmptyString = Some bfz.
+  now cbn. Qed.
+
+  Example parse_bf_bad_left:
+    parse_bf "[[]" = None.
+  auto. Qed.
+
+  Example parse_bf_bad_right:
+    parse_bf "[]]" = None.
+  auto. Qed.
+
+End BFParsing.
+
 
 
 (* GARBAGE STARTS HERE *)
+
+Fixpoint min_unparse_bns b :=
+  match b with
+  | bns_empty => ""%string
+  | bns_ch ch => if is_bfchar_nb ch then String ch "" else ""%string
+  | bns_app s1 s2 => (min_unparse_bns s1 ++ min_unparse_bns s2)%string
+  | bns_nest s => String "[" (min_unparse_bns s ++ "]")
+  end.
+
+  Lemma unparse_equal:
+    forall b, unparse_bf b = unparse_bns (bns_unparse_bf b).
+  Proof.
+    induction b using bf_mut
+    with (P:=fun b => unparse_bf b = unparse_bns (bns_unparse_bf b))
+           (P0:=fun b => unparse_bf (bfc b bfz) = unparse_bns (bns_unparse_bf1 b)).
+    all: try solve [cbn; auto].
+    cbn in IHb; rewrite append_nil_r in IHb.
+    cbn; rewrite IHb; now rewrite IHb0.
+    replace (unparse_bns (bns_unparse_bf1 (bf_loop b))) with (("[" ++ unparse_bf b ++ "]")%string).
+    cbn; now rewrite append_nil_r.
+    simpl; now rewrite <- IHb.
+  Qed.
+
 
 Inductive bneststring :=
 | bns_empty
@@ -791,17 +1008,6 @@ Fixpoint unparse_bns b :=
 
 
 
-Lemma split_nest_check'_tail:
-  forall s ls, split_nest_check' (s :: ls) -> split_nest_check' ls.
-  intros; cbn in *; auto.
-  destruct s; try contradiction.
-  destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-  destruct a0, a1, a2, a3.
-  all: try solve [now destruct s].
-  all: destruct a4, a5, a6, a7.
-  all: try solve [now destruct s].
-Qed.
-
 Lemma parse_bns_correct':
   forall ls, split_nest_check' ls -> unparse_bns (parse_bns' ls) = sconcat ls.
 Proof.
@@ -832,217 +1038,6 @@ Proof.
 Definition split_nest_check ls :=
   ls = [""%string] \/ split_nest_check' ls.
 
-Lemma split_nest'_ok:
-  forall s n x, (n = 0 /\ x = ""%string) \/ (n <> 0 /\ get 0 x = Some "["%char) ->
-                split_nest_check' (split_nest' s n x).
-Proof.
-  intros s n x; functional induction (split_nest' s n x); intros.
-  all: destruct or H; destruct_conjs; try discriminate; subst.
-  - apply IHl; right; now cbn.
-  - apply IHl; right; now cbn.
-  - apply IHl; right; cbn; split; [ auto | now apply append_get ].
-  - destruct x; cbn in H0; [ discriminate | inversion H0; clear H0; subst ].
-    simpl.
-    destruct x; [ simpl; split; auto | ].
-    rewrite <- append_comm_cons.
-    rewrite append_comm_cons; rewrite get_append_tail; split; auto.
-  - apply IHl; right; cbn; split; [ destruct n0; auto | now apply append_get ].
-  - simpl.
-    assert (split_nest_check' (split_nest' s0 0 "")) by auto.
-    destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3, a4, a5, a6, a7; apply H0.
-  - admit.
-  - apply IHl; right; split; [ auto | now apply append_get ].
-  - now cbn.
-  - discriminate.
-  - 
-    destruct x; cbn in H0; [ discriminate | inversion H0; clear H0; subst ].
-    simpl.
-  
-  remember (x ++ "]")%string as s; destruct s.
-  destruct x; simpl in Heqs; discriminate.
-  destruct x; simpl.
-  split; [ | apply IHl; left ]; auto.
-
-
-  s  1, 2, 4, 6: auto.
-  simpl.
-  3: simpl.
-
-  induction s.
-  now cbn.
-  
-
-Definition split_nest_ok ls :=
-  ls = [] \/ ls = [""] \/ split_nest_ok' ls.
-  match ls with
-  | [] => True
-  | ""%string 
-
-Definition is_bfchar a :=
-  match a with
-  | ">" | "<" | "+" | "-" | "." | "," | "[" | "]" => true
-  | _ => false
-  end%char.
-
-Definition is_bfchar_nb a :=
-  match a with
-  | ">" | "<" | "+" | "-" | "." | "," => true
-  | _ => false
-  end%char.
-
-Fixpoint min_unparse_bns b :=
-  match b with
-  | bns_empty => ""%string
-  | bns_ch ch => if is_bfchar_nb ch then String ch "" else ""%string
-  | bns_app s1 s2 => (min_unparse_bns s1 ++ min_unparse_bns s2)%string
-  | bns_nest s => String "[" (min_unparse_bns s ++ "]")
-  end.
-
-Fixpoint strip_nonbfchar s :=
-  match s with
-  | String ch s => if is_bfchar ch then String ch (strip_nonbfchar s) else strip_nonbfchar s
-  | ""%string => s
-  end.
-
-
-Section BFPrinting.
-
-  Fixpoint unparse_bf1 (bf1:BF1) : string :=
-    match bf1 with
-    | bf_right => ">"
-    | bf_left => "<"
-    | bf_inc => "+"
-    | bf_dec => "-"
-    | bf_out => "."
-    | bf_in => ","
-    | bf_loop inner =>
-      String "[" (unparse_bf inner) ++ "]"
-    end
-  with
-    unparse_bf (bf:BF) : string :=
-      match bf with
-      | bfz => ""%string
-      | bfc a bf' => append (unparse_bf1 a) (unparse_bf bf')
-      end.
-
-  Fixpoint bns_unparse_bf1 (bf1:BF1) : bneststring :=
-    match bf1 with
-    | bf_right => bns_ch ">"
-    | bf_left => bns_ch "<"
-    | bf_inc => bns_ch "+"
-    | bf_dec => bns_ch "-"
-    | bf_out => bns_ch "."
-    | bf_in => bns_ch ","
-    | bf_loop inner => bns_nest (bns_unparse_bf inner)
-    end
-  with
-    bns_unparse_bf (bf:BF) : bneststring :=
-      match bf with
-      | bfz => bns_empty
-      | bfc a bf' => bns_app (bns_unparse_bf1 a) (bns_unparse_bf bf')
-      end.
-
-  Lemma unparse_equal:
-    forall b, unparse_bf b = unparse_bns (bns_unparse_bf b).
-  Proof.
-    induction b using bf_mut
-    with (P:=fun b => unparse_bf b = unparse_bns (bns_unparse_bf b))
-           (P0:=fun b => unparse_bf (bfc b bfz) = unparse_bns (bns_unparse_bf1 b)).
-    all: try solve [cbn; auto].
-    cbn in IHb; rewrite append_nil_r in IHb.
-    cbn; rewrite IHb; now rewrite IHb0.
-    replace (unparse_bns (bns_unparse_bf1 (bf_loop b))) with (("[" ++ unparse_bf b ++ "]")%string).
-    cbn; now rewrite append_nil_r.
-    simpl; now rewrite <- IHb.
-  Qed.
-
-
-  Example print_all_bf_commands:
-    unparse_bf
-      (bfc (bf_loop
-              (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec
-                                                          (bfc bf_out (bfc bf_in bfz)))))))
-      bfz)
-    = "[><+-.,]"%string. auto.
-  Qed.
-
-End BFPrinting.
-
-Section BFParsing.
-
-  Fixpoint parse_bns_bf (s:bneststring) : BF :=
-    match s with
-    | bns_empty => bfz
-    | bns_ch ">" => bfc bf_right bfz
-    | bns_ch "<" => bfc bf_left bfz
-    | bns_ch "+" => bfc bf_inc bfz
-    | bns_ch "-" => bfc bf_dec bfz
-    | bns_ch "." => bfc bf_out bfz
-    | bns_ch "," => bfc bf_in bfz
-    | bns_ch _ => bfz
-    | bns_app s1 s2 => bfapp (parse_bns_bf s1) (parse_bns_bf s2)
-    | bns_nest s => bfc (bf_loop (parse_bns_bf s)) bfz
-    end.
-
-  Definition parse_bf (s:string) : option BF :=
-    match parse_bns s bns_empty [] with
-    | Some s => Some (parse_bns_bf s)
-    | None => None
-    end.
-
-  Lemma bfapp_unparse:
-    forall b1 b2, unparse_bns (bns_unparse_bf (bfapp b1 b2)) =
-                  (unparse_bns (bns_unparse_bf b1) ++ unparse_bns (bns_unparse_bf b2))%string.
-    induction b1; intros.
-    - now cbn.
-    - simpl; rewrite IHb1; now rewrite append_assoc.
-  Qed.
- 
-  Lemma parse_bns_bf_correct (s:bneststring):
-    unparse_bns (bns_unparse_bf (parse_bns_bf s)) = min_unparse_bns s.
-  Proof.
-    induction s.
-    - cbn; auto.
-    - cbn; destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-      destruct a0, a1, a2, a3.
-      all: try solve [now cbn].
-      all: destruct a4, a5, a6, a7.
-      all: try solve [now cbn].
-    - cbn; rewrite bfapp_unparse; rewrite IHs1; now rewrite IHs2.
-    - simpl; rewrite IHs; now rewrite append_nil_r.
-  Qed.
-
-    
-  Example parse_all_bf_commands:
-    parse_bf "[><+-.,]" =
-    Some (bfc (bf_loop
-                 (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec (bfc bf_out (bfc bf_in bfz))))))) bfz).
-  now cbn. Qed.
-
-  Example parse_nesting_bf:
-    parse_bf "[[[][]]][]" =
-    Some (bfc
-            (bf_loop (bfc
-                        (bf_loop (bfc
-                                    (bf_loop bfz)
-                                    (bfc (bf_loop bfz) bfz))) bfz))
-            (bfc (bf_loop bfz) bfz)).
-  now cbn. Qed.
-
-  Example parse_empty_bf:
-    parse_bf EmptyString = Some bfz.
-  now cbn. Qed.
-
-  Example parse_bf_bad_left:
-    parse_bf "[[]" = None.
-  auto. Qed.
-
-  Example parse_bf_bad_right:
-    parse_bf "[]]" = None.
-  auto. Qed.
-
-End BFParsing.
 
 
 Check bf_mut.
