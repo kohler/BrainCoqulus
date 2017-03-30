@@ -556,7 +556,7 @@ Section StringNesting.
   | snw_bracket : forall s, split_nest_word (String "[" s).
   Hint Constructors split_nest_word.
 
-  Lemma split_nest'_all_words:
+  Lemma split_nest'_simple_words:
     forall s n x wx w,
       In w (split_nest' s n x) ->
       (x = ""%string /\ n = 0 \/ x = String "[" wx) ->
@@ -593,20 +593,27 @@ Section StringNesting.
       + destruct I as [I | []]; subst; constructor.
   Qed.
       
-  Lemma split_nest'_correct:
+  Inductive split_nest_xword : string -> Prop :=
+  | snxw_ch : forall ch, string_nest_check (String ch "") -> split_nest_xword (String ch "")
+  | snxw_nest : forall s, string_nest_check (String "[" s) ->
+                          string_nest_check (substring 0 (length s - 1) s) ->
+                          split_nest_xword (String "[" s).
+
+  Lemma split_nest'_nested_words:
     forall s n x,
       (x = ""%string \/ n > 0) ->
       string_prenest_check' x 0 = n ->
       string_nest_check (x ++ s) ->
-      split_nest_check (split_nest' s n x).
+      forall w,
+        In w (split_nest' s n x) ->
+        split_nest_xword w.
   Proof.
     intros s n x P; functional induction (split_nest' s n x); intros;
       unfold string_prenest_check in *.
-    - apply IHl.
-      + right; omega.
+    - apply IHl; auto.
       + destruct or P; [ | omega ]; subst; now cbn.
       + rewrite <- append_assoc; now apply H0.
-    - apply IHl.
+    - apply IHl; auto.
       + right; omega.
       + destruct or P; [ rewrite P in H; cbn in H; omega | ].
         rewrite string_prenest_check'_append_nonzero; auto.
@@ -622,6 +629,10 @@ Section StringNesting.
 
       remember (x ++ "]")%string as X; destruct X.
       destruct x; cbn in *; discriminate.
+      destruct H1; subst.
+      rewrite HeqX in *.
+      apply snxw_nest.
+      + subst
       split; [ | split ]; auto.
       intros G; cbn.
       replace (substring 0 (length X - 1) X) with (substring 1 (length x - 1) x).
