@@ -658,21 +658,40 @@ Section StringNesting.
     now apply string_prenest_check'_nest_check.
   Qed.
 
+  Lemma string_prenest_check'_lt_nest_check' s n:
+    string_nest_check' s (S n) > 0 ->
+    string_prenest_check' s n < string_nest_check' s (S n).
+  Proof.
+    revert n; induction s; simpl; auto.
+    intros; nest_destruct; auto.
+    - destruct n; omega.
+    - subst; auto.
+    - destruct n as [|[|n]]; [omega .. |]; now apply IHs.
+  Qed.
 
 
   (* Split a string into a list of strings with nested brackets.
      Handles improperly nested strings.
      e.g., "abc[def][" -> ["a"; "b"; "c"; "[def]"; "["]. *)
 
-  Function split_nest' s n x :=
+  Fixpoint split_nest' s n x :=
     match s with
-    | String "[" s, 0 => split_nest' s 1 (x ++ "[")%string
-    | String "[" s, S _ => split_nest' s (S n) (x ++ "[")%string
-    | String "]" s, 1 => (x ++ "]")%string :: split_nest' s 0 ""%string
-    | String "]" s, S n => split_nest' s n (x ++ "]")%string
-    | String ch s, 0 => (x ++ String ch "")%string :: split_nest' s n ""%string
-    | String ch s, S _ => split_nest' s n (x ++ String ch "")%string
-    | ""%string, _ => if string_dec x ""%string then [] else [x]
+    | ""%string => if string_dec x ""%string then [] else [x]
+    | String ch s => if ascii_dec ch "["
+                     then match n with
+                          | 0 => split_nest' s 1 (x ++ "[")%string
+                          | S _ => split_nest' s (S n) (x ++ "[")%string
+                          end
+                     else if ascii_dec ch "]"
+                          then match n with
+                               | 0 => (x ++ "]")%string :: split_nest' s n ""%string
+                               | 1 => (x ++ "]")%string :: split_nest' s 0 ""%string
+                               | S n => split_nest' s n (x ++ "]")%string
+                               end
+                          else match n with
+                               | 0 => (x ++ String ch "")%string :: split_nest' s n ""%string
+                               | S _ => split_nest' s n (x ++ String ch "")%string
+                               end
     end.
 
   Definition split_nest s := split_nest' s 0 ""%string.
@@ -680,10 +699,12 @@ Section StringNesting.
   Lemma split_nest'_sconcat:
     forall s n x, sconcat (split_nest' s n x) = (x ++ s)%string.
   Proof.
-    intros s n x; functional induction (split_nest' s n x).
-    1, 2, 4, 6: rewrite IHl; now rewrite <- append_assoc.
-    1, 2: simpl; rewrite IHl; now rewrite <- append_assoc.
-    1, 2: now simpl.
+    induction s; cbn in *; intros.
+    destruct (string_dec x ""); simpl; now rewrite append_nil_r.
+    nest_destruct.
+    - destruct n; rewrite IHs; now rewrite <- append_assoc.
+    - destruct n as [|[|n]]; cbn; rewrite IHs; now rewrite <- append_assoc.
+    - destruct n; cbn; rewrite IHs; rewrite <- append_assoc; cbn; auto.
   Qed.
 
   Lemma split_nest_sconcat:
@@ -718,6 +739,16 @@ Section StringNesting.
     | s :: ls => split_nest_element s /\ split_nest_check ls
     end.
 
+  Lemma split_nest_element_singleton ch:
+    ch <> "["%char -> ch <> "]"%char -> split_nest_element (String ch "").
+  Proof.
+    intros; unfold split_nest_element; unfold string_nest_check.
+    destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3; try solve [now cbn].
+    all: destruct a4, a5, a6, a7; try solve [now cbn].
+  Qed.
+
+
   (* If the input string is correctly nested,
      then the output of [split_nest] is correct. *)
       
@@ -728,96 +759,77 @@ Section StringNesting.
       string_nest_check (x ++ s) ->
       split_nest_check (split_nest' s n x).
   Proof.
-    intros s n x P; functional induction (split_nest' s n x); intros;
-      unfold string_prenest_check in *.
-    - apply IHl.
-      + right; omega.
-      + destruct or P; [ | omega ]; subst; now cbn.
-      + rewrite <- append_assoc; now apply H0.
-    - apply IHl.
-      + right; omega.
-      + destruct or P; [ rewrite P in H; cbn in H; omega | ].
-        rewrite string_prenest_check'_append_nonzero; auto.
-        rewrite H; auto.
-      + rewrite <- append_assoc; now apply H0.
-    - assert (string_nest_check (x ++ "]")%string) as F. {
-        now apply string_prenest_check'_add_rbrack.
+    induction s; intros n x P PN NC; destruct or P.
+    - subst; now cbn.
+    - simpl; destruct (string_dec x ""); cbn; try split; auto.
+      rewrite append_nil_r in *.
+      unfold string_nest_check in NC.
+      assert (string_prenest_check' x 0 < 1). {
+        rewrite <- NC; apply string_prenest_check'_lt_nest_check'; omega.
       }
-      assert (string_nest_check s0) as T. {
-        apply string_nest_check_tail with (s1:=(x ++ "]")%string); auto.
-        rewrite <- append_assoc; now cbn.
-      }
-      assert (get 0 x = Some "["%char) as L. {
-        apply string_prenest_check'_lbrack.
-        rewrite H; omega.
-      }
-      destruct x; simpl in L; [ discriminate | inversion L; subst; clear L ]; cbn in *.
-      destruct x; [ cbn; auto | ].
-      repeat rewrite <- append_comm_cons.
-      split; [ split | ]; auto.
-      cbn.
-      replace (length (x ++ "]")%string - 0) with (S (length x)).
-      rewrite substring_append.
-      now apply string_prenest_check'_nest_check.
-      rewrite append_length; cbn; omega.
-    - destruct n0; [ omega | ].
-      apply IHl.
-      + right; omega.
-      + rewrite string_prenest_check'_append_nonzero; cbn;
-          try rewrite H; auto; omega.
-      + now rewrite <- append_assoc.
-    - destruct or P; [ | omega ]; subst.
-      cbn in *.
-      destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-      destruct a0, a1, a2, a3.
-      all: try solve [split; [ now cbn | apply IHl; [ now left | reflexivity | now cbn in H0 ] ]].
-      all: destruct a4, a5, a6, a7.
-      all: try solve [split; [ now cbn | apply IHl; [ now left | reflexivity | now cbn in H0 ] ]].
-    - apply IHl.
-      + right; omega.
-      + rewrite string_prenest_check'_append_nonzero; rewrite H; [ | omega ].
-        destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-        destruct a0, a1, a2, a3.
-        all: try solve [now cbn].
-        all: destruct a4, a5, a6, a7.
-        all: try solve [now cbn].
-        destruct _x; contradiction.
-      + now rewrite <- append_assoc.
-    - now cbn.
-    - destruct x; [ contradiction | ].
-      destruct or P; [ discriminate | ].
-      rewrite <- H in P.
-      generalize (string_prenest_nest_eq_S (String a x) 0 P); intros G.
-      destruct _x; [ omega | ].
-      rewrite H in G.
-      rewrite append_nil_r in H0; unfold string_nest_check in H0.
-      rewrite H0 in G; omega.
+      omega.
+    - subst; cbn in *; nest_destruct.
+      + apply IHs; [ right; omega | | ]; now cbn.
+      + discriminate.
+      + simpl; split; [apply split_nest_element_singleton|]; auto.
+    - cbn in *; nest_destruct.
+      + destruct n; [omega|]; apply IHs.
+        * right; omega.
+        * rewrite string_prenest_check'_append_nonzero; rewrite PN; now simpl.
+        * now rewrite <- append_assoc.
+      + destruct n as [|[|n]]; [omega | |].
+        assert (string_nest_check (x ++ "]")%string) as F. {
+          now apply string_prenest_check'_add_rbrack.
+        }
+        simpl; split; auto.
+        destruct x; [simpl in PN; discriminate |].
+        simpl in PN; destruct (ascii_dec a0 "["); [ subst | discriminate ].
+        rewrite <- append_comm_cons.
+        unfold split_nest_element.
+        destruct x; simpl; [split; now cbn |].
+        split.
+        repeat rewrite append_comm_cons; auto.
+        replace (length (x ++ "]") - 0) with (S (length x)) by (rewrite append_length; simpl; omega).
+        rewrite substring_append.
+        apply string_prenest_nest_eq_1; auto; omega.
+        apply IHs; auto.
+        simpl; apply string_nest_check_tail with (s1:=(x ++ "]")%string); auto.
+        rewrite <- append_assoc; auto.
+        apply IHs; auto.
+        right; omega.
+        rewrite string_prenest_check'_append_nonzero.
+        rewrite PN; now simpl.
+        omega.
+        rewrite <- append_assoc; auto.
+      + destruct n; [omega|].
+        apply IHs.
+        right; omega.
+        rewrite string_prenest_check'_append_nonzero.
+        rewrite PN; simpl; nest_destruct; auto.
+        omega.
+        rewrite <- append_assoc; auto.
   Qed.
 
   Lemma split_nest_correct:
     forall s, string_nest_check s ->
               split_nest_check (split_nest s).
   Proof.
-    intros; apply split_nest'_correct.
-    - now left.
-    - now cbn.
-    - now cbn.
+    intros; apply split_nest'_correct; [ left | cbn .. ]; auto.
   Qed.
 
   Lemma split_nest'_stash s1 s2 n x:
     string_nest_check' s1 (S n) > 0 ->
     split_nest' (s1 ++ s2)%string (S n) x = split_nest' s2 (string_nest_check' s1 (S n)) (x ++ s1)%string.
   Proof.
-    revert s2 n x; induction s1; intros.
-    simpl; now rewrite append_nil_r.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [simpl; simpl in H; rewrite IHs1; auto; now rewrite <- append_assoc].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [simpl; simpl in H; rewrite IHs1; auto; now rewrite <- append_assoc].
-    simpl; simpl in H; destruct n.
-    omega.
-    rewrite IHs1; auto; now rewrite <- append_assoc.
+    revert s2 n x; induction s1; intros; nest_destruct.
+    - now rewrite append_nil_r.
+    - replace (x ++ String "[" s1)%string with ((x ++ "[") ++ s1)%string by (rewrite <- append_assoc; now simpl).
+      now apply IHs1.
+    - destruct n; [omega|].
+      replace (x ++ String "]" s1)%string with ((x ++ "]") ++ s1)%string by (rewrite <- append_assoc; now simpl).
+      now apply IHs1.
+    - replace (x ++ String a s1)%string with ((x ++ String a "") ++ s1)%string by (rewrite <- append_assoc; now simpl).
+      now apply IHs1.
   Qed.
 
   Lemma split_nest_append s1 s2:
