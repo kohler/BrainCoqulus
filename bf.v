@@ -296,12 +296,16 @@ Section StringNesting.
 
   (* [string_nest_check s] holds iff [s] is a properly nested string. *)
   Fixpoint string_nest_check' s n :=
-    match s, n with
-    | String "[" s, _ => string_nest_check' s (S n)
-    | String "]" s, S (S n) => string_nest_check' s (S n)
-    | String "]" s, _ => 0
-    | String ch s, _ => string_nest_check' s n
-    | ""%string, _ => n
+    match s with
+    | String ch s => if ascii_dec ch "["
+                     then string_nest_check' s (S n)
+                     else if ascii_dec ch "]"
+                          then match n with
+                               | S (S n) => string_nest_check' s (S n)
+                               | _ => 0
+                               end
+                          else string_nest_check' s n
+    | _ => n
     end.
 
   Definition string_nest_check s :=
@@ -315,13 +319,11 @@ Section StringNesting.
     revert s2 n; induction s1; intros.
     cbn; auto.
     cbn in *.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [now apply IHs1].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [now apply IHs1].
-    destruct n; [ | destruct n ]; try omega.
-    now apply IHs1.
+    destruct (ascii_dec a "[").
+    1: now apply IHs1.
+    destruct (ascii_dec a "]").
+    1: destruct n; [ | destruct n ]; try omega.
+    all: now apply IHs1.
   Qed.
 
   Lemma string_nest_check'_add s n:
@@ -331,22 +333,17 @@ Section StringNesting.
               string_nest_check' s n + (m - n).
   Proof.
     revert n; induction s; intros.
-    cbn; auto. omega.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [ cbn in *; now apply IHs ].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [ cbn in *; now apply IHs ].
-
-    cbn in *.
-    replace (m - n) with (S m - S n) by omega.
-    apply IHs; auto. omega.
-
-    cbn in *.
-    destruct n; [ omega | destruct n ]; [ omega | ].
-    destruct m; [ omega | destruct m ]; [ omega | ].
-    replace (S (S m) - S (S n)) with (S m - S n) by omega.
-    apply IHs; auto. omega.
+    1: cbn; auto; omega.
+    simpl in *.
+    destruct (ascii_dec a "[").
+    1: replace (m - n) with (S m - S n) by omega.
+    1: apply IHs; auto; omega.
+    destruct (ascii_dec a "]").
+    1: destruct n; [ omega | destruct n ]; [ omega | ].
+    1: destruct m; [ omega | destruct m ]; [ omega | ].
+    1: replace (S (S m) - S (S n)) with (S m - S n) by omega.
+    1: apply IHs; auto; omega.
+    now apply IHs.
   Qed.
 
   Lemma string_nest_check_tail s1 s2:
@@ -413,19 +410,12 @@ Section StringNesting.
     }
 
     (* everything else *)
-    assert (string_nest_check' s (S n) = S m). {
-      destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-      destruct a0, a1, a2, a3; auto.
-      all: destruct a4, a5, a6, a7; auto.
-      all: contradiction.
-    }
-    apply H in H2; auto.
-    destruct H2 as [s1 [s2 [X0 [X1 X2]]]].
+    apply H in H0; auto.
+    destruct H0 as [s1 [s2 [X0 [X1 X2]]]].
     subst; exists (String a s1), s2; split; [ | split ]; auto.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3; auto.
-    all: destruct a4, a5, a6, a7; auto.
-    all: contradiction.
+    cbn.
+    destruct (ascii_dec a "["); [ contradiction | ].
+    destruct (ascii_dec a "]"); [ contradiction | auto ].
   Qed.
 
   Lemma string_nest_check_break ch s:
@@ -459,13 +449,10 @@ Section StringNesting.
     }
 
     (* everything else *)
-    intros; exists ""%string, s; unfold string_nest_check in *.
-    destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: cbn in *; auto.
-    all: destruct a4, a5, a6, a7.
-    all: cbn in *; auto.
-    all: contradiction.
+    intros; exists ""%string, s; unfold string_nest_check in *; cbn in *.
+    split; [ | split ]; auto.
+    all: destruct (ascii_dec ch "["); [ contradiction | ].
+    all: destruct (ascii_dec ch "]"); [ contradiction | auto ].
   Qed.
 
   Lemma string_nest_check_nest s:
@@ -503,10 +490,8 @@ Section StringNesting.
     string_nester s -> string_nest_check s.
   Proof.
     intros; induction H; unfold string_nest_check in *; cbn; auto.
-    - destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-      destruct a0, a1, a2, a3; auto.
-      all: destruct a4, a5, a6, a7; auto.
-      all: contradiction.
+    - destruct (ascii_dec ch "["); [ contradiction | ].
+      destruct (ascii_dec ch "]"); [ contradiction | auto ].
     - assert (string_nest_check' s1 2 = 2). {
         rewrite string_nest_check'_add with (n:=1); try rewrite H1; omega.
       }
@@ -573,13 +558,18 @@ Section StringNesting.
   (* [string_prenest_check s] holds iff [s] starts with a left bracket,
      and [s] is a prefix of some properly nested string. *)
   Fixpoint string_prenest_check' s n :=
-    match s, n with
-    | ""%string, _ => n
-    | String "[" s, _ => string_prenest_check' s (S n)
-    | _, 0 => n
-    | String "]" s, S (S n) => string_prenest_check' s (S n)
-    | String "]" s, S _ => 0
-    | String ch s, S _ => string_prenest_check' s n
+    match s with
+    | ""%string => n
+    | String ch s => if ascii_dec ch "["
+                     then string_prenest_check' s (S n)
+                     else if eq_nat_dec n 0
+                          then n
+                          else if ascii_dec ch "]"
+                               then match n with
+                                    | S (S n) => string_prenest_check' s (S n)
+                                    | _ => 0
+                                    end
+                               else string_prenest_check' s n
     end.
 
   Definition string_prenest_check s :=
@@ -592,14 +582,12 @@ Section StringNesting.
   Proof.
     revert s2 n; induction s1; cbn; intros.
     destruct n; omega.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [destruct n; [ omega | now apply IHs1 ]].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [destruct n; [ omega | now apply IHs1 ]].
-    now apply IHs1.
-    destruct n; try omega.
-    destruct n; try omega.
+    destruct (ascii_dec a "["); [ now apply IHs1 | ].
+    destruct (Nat.eq_dec n 0); [ omega | ].
+    destruct (ascii_dec a "]"). {
+      destruct n; [ omega | destruct n ]; [ omega | ].
+      now apply IHs1.
+    }
     now apply IHs1.
   Qed.
 
@@ -618,19 +606,11 @@ Section StringNesting.
     2: rewrite string_prenest_check'_append_nonzero in * by (rewrite HeqN; omega).
     all: rewrite HeqN in *; clear HeqN.
     all: cbn in *.
-    - destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
-      all: destruct b0, b1, b2, b3.
-      all: try solve [destruct n; [ | discriminate ]; auto].
-      all: destruct b4, b5, b6, b7.
-      all: try solve [destruct n; [ | discriminate ]; auto].
-      discriminate.
-      destruct n; [ auto | destruct n ]; [ auto | discriminate ].
-    - destruct ch as [b0 b1 b2 b3 b4 b5 b6 b7].
-      all: destruct b0, b1, b2, b3.
-      all: try solve [discriminate].
-      all: destruct b4, b5, b6, b7.
-      all: try solve [discriminate].
-      destruct N; [ auto | discriminate ].
+    all: destruct (ascii_dec ch "["); [ discriminate | ].
+    all: destruct (Nat.eq_dec n 0); [ auto | ].
+    all: destruct (ascii_dec ch "]"); [ | try discriminate; try contradiction ].
+    1: destruct n; [ | destruct n ]; auto; discriminate.
+    all: destruct N; auto; discriminate.
   Qed.
 
   Lemma string_prenest_check'_append_inv_nonzero s1 s2 n:
@@ -651,8 +631,17 @@ Section StringNesting.
     forall m, string_prenest_check' s (n + m) =
               string_prenest_check' s n + m.
   Proof.
-    revert n; induction s; intros.
-    cbn; auto.
+    revert n; induction s; intros; cbn; auto.
+    destruct (ascii_dec a "["). {
+      subst; cbn in H; rewrite <- plus_Sn_m; now apply IHs.
+    }
+    destruct (Nat.eq_dec n 0). {
+      subst; cbn in H.
+      destruct (ascii_dec a "["); [ | omega ].
+      replace (0 + m) with m by omega.
+      destruct (Nat.eq_dec m 0); subst; auto.
+      destruct (ascii_dec "[" "]"); [ discriminate | ].
+      apply IHs.
     destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
     destruct a0, a1, a2, a3.
     all: try solve [ cbn in *; destruct n;
