@@ -176,6 +176,16 @@ Section StringFacts.
     rewrite Nat.succ_min_distr; auto.
   Qed.
 
+  Lemma substring_split:
+    forall s n, n <= length s -> s = (substring 0 n s ++ substring n (length s - n) s).
+  Proof.
+    induction s; induction n; intros.
+    rewrite substring_empty; now cbn.
+    simpl in H; omega.
+    rewrite substring_empty; simpl; rewrite substring_refl; now cbn.
+    cbn; rewrite <- IHs; auto.
+    cbn in H; omega.
+  Qed.
 
   Lemma append_get:
     forall s n ch, get n s = Some ch ->
@@ -257,39 +267,32 @@ Section StringFacts.
 
 End StringFacts.
 
+Section StringStrongInduction.
+
+  Variable P:string -> Prop.
+  Hypothesis IH: forall s, (forall t, length t < length s -> P t) -> P s.
+
+  Local Lemma ssi_empty: P ""%string.
+  Proof.
+    apply IH; simpl; intros; omega.
+  Qed.
+
+  Local Lemma ssi_weak: forall s t, length t <= length s -> P t.
+  Proof.
+    induction s; intros.
+    - simpl in H; destruct t; [apply ssi_empty | simpl in H; omega].
+    - apply IH; intros; apply IHs; simpl in *; omega.
+  Qed.
+  
+  Lemma string_strong_ind: forall s, P s.
+  Proof.
+    eauto using ssi_weak.
+  Qed.
+
+End StringStrongInduction.
+
 
 Section StringNesting.
-
-  (* Split a string into a list of strings with nested brackets.
-     Handles improperly nested strings.
-     e.g., "abc[def][" -> ["a"; "b"; "c"; "[def]"; "["]. *)
-  
-  Function split_nest' s n x :=
-    match s, n with
-    | String "[" s, 0 => split_nest' s 1 (x ++ "[")%string
-    | String "[" s, S _ => split_nest' s (S n) (x ++ "[")%string
-    | String "]" s, 1 => (x ++ "]")%string :: split_nest' s 0 ""%string
-    | String "]" s, S n => split_nest' s n (x ++ "]")%string
-    | String ch s, 0 => (x ++ String ch "")%string :: split_nest' s n ""%string
-    | String ch s, S _ => split_nest' s n (x ++ String ch "")%string
-    | ""%string, _ => if string_dec x ""%string then [] else [x]
-    end.
-
-  Definition split_nest s := split_nest' s 0 ""%string.
-
-  Lemma split_nest'_sconcat:
-    forall s n x, sconcat (split_nest' s n x) = (x ++ s)%string.
-    intros s n x; functional induction (split_nest' s n x).
-    1, 2, 4, 6: rewrite IHl; now rewrite <- append_assoc.
-    1, 2: simpl; rewrite IHl; now rewrite <- append_assoc.
-    1, 2: now simpl.
-  Qed.
-
-  Lemma split_nest_sconcat:
-    forall s, sconcat (split_nest s) = s.
-    unfold split_nest; intros; now rewrite split_nest'_sconcat.
-  Qed.
-
 
   (* [string_nest_check s] holds iff [s] is a properly nested string. *)
   Fixpoint string_nest_check' s n :=
@@ -301,7 +304,8 @@ Section StringNesting.
     | ""%string, _ => n
     end.
 
-  Definition string_nest_check s := string_nest_check' s 1 = 1.
+  Definition string_nest_check s :=
+    string_nest_check' s 1 = 1.
 
   Lemma string_nest_check'_append_nonzero s1 s2 n:
     string_nest_check' s1 n > 0 ->
@@ -322,20 +326,27 @@ Section StringNesting.
 
   Lemma string_nest_check'_add s n:
     string_nest_check' s n > 0 ->
-    forall m, string_nest_check' s (n + m) =
-              string_nest_check' s n + m.
+    forall m, m >= n ->
+              string_nest_check' s m =
+              string_nest_check' s n + (m - n).
   Proof.
     revert n; induction s; intros.
-    cbn; auto.
+    cbn; auto. omega.
     destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
     destruct a0, a1, a2, a3.
     all: try solve [ cbn in *; now apply IHs ].
     all: destruct a4, a5, a6, a7.
     all: try solve [ cbn in *; now apply IHs ].
-    cbn in *; rewrite <- plus_Sn_m. now apply IHs.
-    cbn in *; destruct n; [ omega | destruct n ]; [ omega | ].
-    repeat rewrite plus_Sn_m; rewrite <- plus_Sn_m.
-    now apply IHs.
+
+    cbn in *.
+    replace (m - n) with (S m - S n) by omega.
+    apply IHs; auto. omega.
+
+    cbn in *.
+    destruct n; [ omega | destruct n ]; [ omega | ].
+    destruct m; [ omega | destruct m ]; [ omega | ].
+    replace (S (S m) - S (S n)) with (S m - S n) by omega.
+    apply IHs; auto. omega.
   Qed.
 
   Lemma string_nest_check_tail s1 s2:
@@ -346,6 +357,216 @@ Section StringNesting.
     intros; unfold string_nest_check in *.
     rewrite string_nest_check'_append_nonzero in H0 by omega.
     now rewrite H in H0.
+  Qed.
+
+  Lemma string_nest_check_append s1 s2:
+    string_nest_check s1 ->
+    string_nest_check s2 ->
+    string_nest_check (s1 ++ s2)%string.
+  Proof.
+    intros; unfold string_nest_check in *.
+    rewrite string_nest_check'_append_nonzero.
+    now rewrite H.
+    rewrite H; omega.
+  Qed.
+
+  Lemma string_nest_check'_break s n m:
+    string_nest_check' s (S n) = S m ->
+    m < n ->
+    exists s1 s2, s = (s1 ++ String "]" s2)%string
+                  /\ string_nest_check' s1 1 = 1
+                  /\ string_nest_check' s2 n = S m.
+  Proof.
+    revert s n m.
+    induction s using string_strong_ind; simpl; intros.
+
+    destruct s; simpl in H0; [ omega | ].
+
+    destruct (ascii_dec a "[")%char. {
+      (* "[" case *)
+      subst.
+      apply H in H0; [ | simpl; omega | omega ].
+      destruct H0 as [s1 [s2 [A1 [A2 A3]]]].
+      apply H in A3; [ | | omega ].
+      destruct A3 as [t1 [t2 [B1 [B2 B3]]]].
+      exists (String "[" (s1 ++ String "]" t1)), t2.
+      split; [ | split ].
+      - rewrite A1; rewrite B1; repeat rewrite append_comm_cons.
+        now rewrite append_assoc.
+      - simpl.
+        assert (string_nest_check' s1 2 = 2). {
+          rewrite string_nest_check'_add with (n:=1); try rewrite A2; omega.
+        }
+        rewrite string_nest_check'_append_nonzero.
+        rewrite H0.
+        now simpl.
+        rewrite H0; omega.
+      - auto.
+      - simpl; rewrite A1; rewrite append_length; simpl; omega.
+    }
+
+    destruct (ascii_dec a "]")%char. {
+      (* "]" case *)
+      subst.
+      destruct n; [ omega | ].
+      exists ""%string, s; split; [ | split ]; auto.
+    }
+
+    (* everything else *)
+    assert (string_nest_check' s (S n) = S m). {
+      destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3; auto.
+      all: destruct a4, a5, a6, a7; auto.
+      all: contradiction.
+    }
+    apply H in H2; auto.
+    destruct H2 as [s1 [s2 [X0 [X1 X2]]]].
+    subst; exists (String a s1), s2; split; [ | split ]; auto.
+    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3; auto.
+    all: destruct a4, a5, a6, a7; auto.
+    all: contradiction.
+  Qed.
+
+  Lemma string_nest_check_break ch s:
+    string_nest_check (String ch s) ->
+    exists s1 s2, s = (s1 ++ s2)%string /\ string_nest_check (String ch s1) /\ string_nest_check s2.
+  Proof.
+    destruct (ascii_dec ch "[")%char. {
+      (* "[" case *)
+      subst; intros.
+      unfold string_nest_check in *.
+      simpl in H.
+      apply string_nest_check'_break in H.
+      destruct H as [s1 [s2 [X0 [X1 X2]]]].
+      exists (s1 ++ "]")%string, s2.
+      split; [ | split].
+      rewrite <- append_assoc; apply X0.
+      simpl.
+      assert (string_nest_check' s1 2 = 2). {
+        rewrite string_nest_check'_add with (n:=1); try rewrite X1; omega.
+      }
+      rewrite string_nest_check'_append_nonzero.
+      rewrite H; now simpl.
+      rewrite H; omega.
+      auto.
+      omega.
+    }
+
+    destruct (ascii_dec ch "]")%char. {
+      (* impossible *)
+      subst; intros; unfold string_nest_check in H; cbn in H; discriminate.
+    }
+
+    (* everything else *)
+    intros; exists ""%string, s; unfold string_nest_check in *.
+    destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3.
+    all: cbn in *; auto.
+    all: destruct a4, a5, a6, a7.
+    all: cbn in *; auto.
+    all: contradiction.
+  Qed.
+
+  Lemma string_nest_check_nest s:
+    string_nest_check s ->
+    string_nest_check (String "[" s ++ "]")%string.
+  Proof.
+    intros; unfold string_nest_check in *.
+    assert (string_nest_check' s 2 = 2). {
+      rewrite string_nest_check'_add with (n:=1); try rewrite H; omega.
+    }
+    simpl; rewrite string_nest_check'_append_nonzero.
+    rewrite H0; now simpl.
+    rewrite H0; omega.
+  Qed.
+
+
+  (* [string_nester s] shows inductively that [s] is nested. *)
+  Inductive string_nester : string -> Prop :=
+  | sn_empty : string_nester ""%string
+  | sn_ch : forall ch s, ch <> "["%char -> ch <> "]"%char -> string_nester s -> string_nester (String ch s)
+  | sn_nest : forall s1 s2, string_nester s1 -> string_nester s2 -> string_nester (String "[" s1 ++ String "]" s2)%string.
+  Hint Constructors string_nester.
+
+  Lemma string_nester_append s1 s2:
+    string_nester s1 -> string_nester s2 -> string_nester (s1 ++ s2)%string.
+  Proof.
+    intros N1; revert s2; induction N1; intros; auto.
+    apply IHN1 in H1; rewrite <- append_comm_cons; now constructor.
+    apply IHN1_2 in H; rewrite <- append_assoc.
+    replace (String "]" s2 ++ s0)%string with ("]" ++ s2 ++ s0)%string by (now simpl).
+    apply sn_nest; auto.
+  Qed.
+
+  Lemma string_nester_checks s:
+    string_nester s -> string_nest_check s.
+  Proof.
+    intros; induction H; unfold string_nest_check in *; cbn; auto.
+    - destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3; auto.
+      all: destruct a4, a5, a6, a7; auto.
+      all: contradiction.
+    - assert (string_nest_check' s1 2 = 2). {
+        rewrite string_nest_check'_add with (n:=1); try rewrite H1; omega.
+      }
+      rewrite string_nest_check'_append_nonzero.
+      rewrite H1; simpl; auto.
+      rewrite H1; omega.
+  Qed.
+
+  Lemma string_checks_nester s:
+    string_nest_check s -> string_nester s.
+  Proof.
+    induction s using string_strong_ind.
+    intros; destruct s; auto.
+
+    destruct (ascii_dec a "[")%char. {
+      apply string_nest_check_break in H0.
+      destruct H0 as [s1 [s2 [X0 [X1 X2]]]]; subst.
+      apply H in X2.
+      2: simpl; rewrite append_length; omega.
+      rewrite append_comm_cons.
+      destruct s2.
+      - rewrite append_nil_r.
+        unfold string_nest_check in X1; cbn in X1.
+        apply string_nest_check'_break in X1.
+        destruct X1 as [s2 [s3 [Y0 [Y1 Y2]]]].
+        rewrite Y0.
+        replace (String "]" s3) with ("]" ++ s3)%string by (now simpl).
+        rewrite append_comm_cons; rewrite append_assoc.
+        apply string_nester_append.
+        apply sn_nest; auto.
+        + apply H; auto.
+          rewrite Y0; simpl; repeat rewrite append_length; omega.
+        + apply H; auto.
+          rewrite Y0; simpl; repeat rewrite append_length; simpl; omega.
+        + omega.
+      - apply string_nester_append.
+        + apply H; auto.
+          simpl; repeat rewrite append_length; simpl; omega.
+        + auto.
+    }
+
+    assert (string_nester (String a "")). {
+      apply sn_ch; auto.
+      intros F; subst.
+      unfold string_nest_check in H0; simpl in H0; discriminate.
+    }
+    destruct s; auto.
+    replace (String a (String a0 s)) with (String a "" ++ String a0 s)%string by (now cbn).
+    apply string_nester_append; auto.
+    apply H.
+    simpl; omega.
+    apply string_nest_check_tail with (s1:=String a ""%string).
+    now apply string_nester_checks.
+    auto.
+  Qed.
+
+  Lemma string_nester_iff:
+    forall s, string_nest_check s <-> string_nester s.
+  Proof.
+    split; intros; [ apply string_checks_nester | apply string_nester_checks ]; auto.
   Qed.
 
 
@@ -535,63 +756,66 @@ Section StringNesting.
 
 
 
+  (* Split a string into a list of strings with nested brackets.
+     Handles improperly nested strings.
+     e.g., "abc[def][" -> ["a"; "b"; "c"; "[def]"; "["]. *)
+
+  Function split_nest' s n x :=
+    match s, n with
+    | String "[" s, 0 => split_nest' s 1 (x ++ "[")%string
+    | String "[" s, S _ => split_nest' s (S n) (x ++ "[")%string
+    | String "]" s, 1 => (x ++ "]")%string :: split_nest' s 0 ""%string
+    | String "]" s, S n => split_nest' s n (x ++ "]")%string
+    | String ch s, 0 => (x ++ String ch "")%string :: split_nest' s n ""%string
+    | String ch s, S _ => split_nest' s n (x ++ String ch "")%string
+    | ""%string, _ => if string_dec x ""%string then [] else [x]
+    end.
+
+  Definition split_nest s := split_nest' s 0 ""%string.
+
+  Lemma split_nest'_sconcat:
+    forall s n x, sconcat (split_nest' s n x) = (x ++ s)%string.
+  Proof.
+    intros s n x; functional induction (split_nest' s n x).
+    1, 2, 4, 6: rewrite IHl; now rewrite <- append_assoc.
+    1, 2: simpl; rewrite IHl; now rewrite <- append_assoc.
+    1, 2: now simpl.
+  Qed.
+
+  Lemma split_nest_sconcat:
+    forall s, sconcat (split_nest s) = s.
+  Proof.
+    unfold split_nest; intros; now rewrite split_nest'_sconcat.
+  Qed.
+
+
   (* This is the spec for [split_nest] when applied to correctly
      nested strings. *)
+  Definition split_nest_element s :=
+    match s with
+    | ""%string =>
+      (* no empty components *)
+      False
+    | String _ "" =>
+      (* singleton components are nested (no brackets) *)
+      string_nest_check s
+    | String "[" sn =>
+      (* if first char is a left bracket, then component is nested
+         (ends with right bracket) and middle is nested (eliminates
+         things like "[][]") *)
+      string_nest_check s
+      /\ string_nest_check (substring 0 (length sn - 1) sn)
+    | _  => False
+    end.
+
   Fixpoint split_nest_check ls :=
     match ls with
     | [] => True
-    | ""%string :: ls => False (* Empty strings not allowed *)
-    | s :: ls =>
-      string_nest_check s       (* All components are properly nested *)
-      /\ (* Bracketed components contain just one loop *)
-         (get 0 s = Some "["%char ->
-          string_nest_check (substring 1 (length s - 2) s))
-      /\ split_nest_check ls
+    | s :: ls => split_nest_element s /\ split_nest_check ls
     end.
 
   (* If the input string is correctly nested,
      then the output of [split_nest] is correct. *)
-  Inductive split_nest_word : string -> Prop :=
-  | snw_ch : forall ch, split_nest_word (String ch "")
-  | snw_bracket : forall s, split_nest_word (String "[" s).
-  Hint Constructors split_nest_word.
-
-  Lemma split_nest'_all_words:
-    forall s n x wx w,
-      In w (split_nest' s n x) ->
-      (x = ""%string /\ n = 0 \/ x = String "[" wx) ->
-      split_nest_word w.
-  Proof.
-    intros s n x; functional induction (split_nest' s n x); intros wx w I X.
-    - destruct X as [[X N] | X].
-      + apply (IHl ""%string w); auto.
-        right; now subst.
-      + apply (IHl (wx ++ "[")%string w); auto.
-        right; now subst.
-    - destruct X as [[X N] | X].
-      + apply (IHl ""%string w); auto.
-        right; now subst.
-      + apply (IHl (wx ++ "[")%string w); auto.
-        right; now subst.
-    - destruct I.
-      + destruct X as [[X N] | X]; subst; constructor.
-      + destruct X as [[X N] | X]; apply (IHl wx w); auto.
-    - destruct X as [[X N] | X].
-      + discriminate.
-      + apply (IHl (wx ++ "]")%string w); auto.
-        right; now subst.
-    - destruct I.
-      + destruct X as [[X N] | X]; subst; constructor.
-      + destruct X as [[X N] | X]; apply (IHl wx w); auto.
-    - destruct X as [[X N] | X].
-      + discriminate.
-      + apply (IHl (wx ++ String ch "") w)%string; auto.
-        right; now subst.
-    - destruct I.
-    - destruct X as [[X N] | X].
-      + contradiction.
-      + destruct I as [I | []]; subst; constructor.
-  Qed.
       
   Lemma split_nest'_correct:
     forall s n x,
@@ -619,21 +843,19 @@ Section StringNesting.
         apply string_nest_check_tail with (s1:=(x ++ "]")%string); auto.
         rewrite <- append_assoc; now cbn.
       }
-
-      remember (x ++ "]")%string as X; destruct X.
-      destruct x; cbn in *; discriminate.
-      split; [ | split ]; auto.
-      intros G; cbn.
-      replace (substring 0 (length X - 1) X) with (substring 1 (length x - 1) x).
-      now apply string_prenest_check'_substring.
-      destruct x; cbn in *.
-      inversion G; subst; discriminate.
-      inversion HeqX.
-      rewrite append_length; cbn.
-      replace (length x + 1 - 1) with (length x) by omega.
+      assert (get 0 x = Some "["%char) as L. {
+        apply string_prenest_check'_lbrack.
+        rewrite H; omega.
+      }
+      destruct x; simpl in L; [ discriminate | inversion L; subst; clear L ]; cbn in *.
+      destruct x; [ cbn; auto | ].
+      repeat rewrite <- append_comm_cons.
+      split; [ split | ]; auto.
+      cbn.
+      replace (length (x ++ "]")%string - 0) with (S (length x)).
       rewrite substring_append.
-      replace (length x - 0) with (length x) by omega.
-      apply substring_refl.
+      now apply string_prenest_check'_nest_check.
+      rewrite append_length; cbn; omega.
     - destruct n0; [ omega | ].
       apply IHl.
       + right; omega.
@@ -642,22 +864,11 @@ Section StringNesting.
       + now rewrite <- append_assoc.
     - destruct or P; [ | omega ]; subst.
       cbn in *.
-      split; [ | split ].
-      + destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-        destruct a0, a1, a2, a3.
-        all: try solve [now cbn].
-        all: destruct a4, a5, a6, a7.
-        all: try solve [now cbn].
-      + intros; now cbn.
-      + apply IHl; [ now left | auto | ].
-        unfold string_nest_check in H0; cbn in H0.
-        destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-        destruct a0, a1, a2, a3.
-        all: try solve [apply H0].
-        all: destruct a4, a5, a6, a7.
-        all: try solve [apply H0].
-        contradiction.
-        discriminate.
+      destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3.
+      all: try solve [split; [ now cbn | apply IHl; [ now left | reflexivity | now cbn in H0 ] ]].
+      all: destruct a4, a5, a6, a7.
+      all: try solve [split; [ now cbn | apply IHl; [ now left | reflexivity | now cbn in H0 ] ]].
     - apply IHl.
       + right; omega.
       + rewrite string_prenest_check'_append_nonzero; rewrite H; [ | omega ].
@@ -689,7 +900,75 @@ Section StringNesting.
     - now cbn.
   Qed.
 
-  (* NB should also show that non-bracketed groups are a single character long *)
+  Lemma split_nest'_stash s1 s2 n x:
+    string_nest_check' s1 (S n) > 0 ->
+    split_nest' (s1 ++ s2)%string (S n) x = split_nest' s2 (string_nest_check' s1 (S n)) (x ++ s1)%string.
+  Proof.
+    revert s2 n x; induction s1; intros.
+    simpl; now rewrite append_nil_r.
+    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+    destruct a0, a1, a2, a3.
+    all: try solve [simpl; simpl in H; rewrite IHs1; auto; now rewrite <- append_assoc].
+    all: destruct a4, a5, a6, a7.
+    all: try solve [simpl; simpl in H; rewrite IHs1; auto; now rewrite <- append_assoc].
+    simpl; simpl in H; destruct n.
+    omega.
+    rewrite IHs1; auto; now rewrite <- append_assoc.
+  Qed.
+
+  Lemma split_nest_append s1 s2:
+    split_nest_element s1 ->
+    split_nest (s1 ++ s2)%string = s1 :: split_nest s2.
+  Proof.
+    unfold split_nest_element; unfold split_nest; intros.
+    destruct s1 as [s1 | ch s]; try contradiction.
+    destruct s as [s | ch2 s]; try contradiction.
+    all: destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+    all: destruct a0, a1, a2, a3; auto.
+    1-2: destruct a4, a5, a6, a7; auto.
+    all: unfold string_nest_check in *.
+    1: cbn in H; discriminate.
+    1-16: try contradiction.
+    destruct a4, a5, a6, a7; try contradiction.
+    destruct H as [H0 H1].
+    assert (String ch2 s = substring 0 (length s) (String ch2 s) ++ substring (length s) 1 (String ch2 s))%string. {
+      replace 1 with (length (String ch2 s) - length s).
+      apply substring_split.
+      simpl; try omega.
+      simpl; destruct (length s); omega.
+    }
+    remember (substring 0 (length (String ch2 s) - 1) (String ch2 s)) as sp.
+    remember (substring (length (String ch2 s) - 1) 1 (String ch2 s)) as sx.
+    replace (length (String ch2 s) - 1) with (length s) in * by (cbn; omega).
+    assert (length sx = 1). {
+      rewrite Heqsx; rewrite substring_length.
+      replace (length (String ch2 s) - length s) with 1.
+      now simpl.
+      simpl; destruct (length s); omega.
+    }
+    rewrite <- Heqsp in *; rewrite <- Heqsx in *; rewrite H in *.
+    clear ch2 s Heqsp H Heqsx.
+    cbn; rewrite <- append_assoc.
+    rewrite split_nest'_stash.
+    assert (sx = "]"%string). {
+      destruct sx; [ simpl in H2; discriminate | ].
+      destruct sx; [ | simpl in H2; discriminate ].
+      simpl in H0.
+      assert (string_nest_check' sp 2 = 2). {
+        rewrite string_nest_check'_add with (n:=1); try rewrite H1; omega.
+      }
+      rewrite string_nest_check'_append_nonzero in H0.
+      2: rewrite H; omega.
+      rewrite H in H0; simpl in H0.
+      destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3; try discriminate.
+      all: destruct a4, a5, a6, a7; try discriminate.
+      auto.
+    }
+    rewrite H; simpl.
+    now rewrite H1.
+    rewrite H1; omega.
+  Qed.
 
 End StringNesting.
 
@@ -713,6 +992,49 @@ Section BFPrinting.
       | bfc a bf' => append (unparse_bf1 a) (unparse_bf bf')
       end.
 
+  Lemma unparse_bf_nest_check bf:
+    string_nest_check (unparse_bf bf).
+  Proof.
+    induction bf using bf_mut
+    with (P:=fun bf => string_nest_check (unparse_bf bf))
+           (P0:=fun bf1 => string_nest_check (unparse_bf1 bf1)).
+    all: unfold string_nest_check in *; try solve [cbn; auto].
+    now apply string_nest_check_append.
+    assert (string_nest_check' (unparse_bf bf) 2 = 2). {
+      rewrite string_nest_check'_add with (n:=1); try rewrite IHbf; omega.
+    }      
+    simpl; fold unparse_bf.
+    rewrite string_nest_check'_append_nonzero.
+    now rewrite H.
+    rewrite H; omega.
+  Qed.
+
+  Lemma unparse_bf1_nest_check bf1:
+    string_nest_check (unparse_bf1 bf1).
+  Proof.
+    replace (unparse_bf1 bf1) with (unparse_bf (bfc bf1 bfz)).
+    apply unparse_bf_nest_check.
+    simpl; now rewrite append_nil_r.
+  Qed.
+
+  Lemma unparse_bf_empty bf:
+    unparse_bf bf = ""%string -> bf = bfz.
+  Proof.
+    induction bf using bf_mut
+    with (P:=fun bf => unparse_bf bf = ""%string -> bf = bfz)
+           (P0:=fun bf1 => ~ unparse_bf1 bf1 = ""%string).
+    all: intros; try solve [cbn; congruence].
+    cbn in H.
+    destruct b; discriminate.
+  Qed.
+
+  Lemma unparse_bfapp b1 b2:
+    unparse_bf (bfapp b1 b2) = (unparse_bf b1 ++ unparse_bf b2)%string.
+  Proof.
+    induction b1; simpl; auto.
+    rewrite IHb1; now rewrite append_assoc.
+  Qed.
+    
   Example print_all_bf_commands:
     unparse_bf
       (bfc (bf_loop
@@ -744,373 +1066,222 @@ Section BFParsing.
     | ""%string => s
     end.
 
+  Definition parse_bf1 a bf :=
+    match a with
+    | ">" => bfc bf_right bf
+    | "<" => bfc bf_left bf
+    | "+" => bfc bf_inc bf
+    | "-" => bfc bf_dec bf
+    | "." => bfc bf_out bf
+    | "," => bfc bf_in bf
+    | _ => bf
+    end%char.
+
   Function parse_split_bf (l:list string) {measure sconcat_length l} : BF :=
     match l with
     | [] => bfz
-    | ">" :: l => bfc bf_right (parse_split_bf l)
-    | "<" :: l => bfc bf_left (parse_split_bf l)
-    | "+" :: l => bfc bf_inc (parse_split_bf l)
-    | "-" :: l => bfc bf_dec (parse_split_bf l)
-    | "." :: l => bfc bf_out (parse_split_bf l)
-    | "," :: l => bfc bf_in (parse_split_bf l)
-    | (String "[" _) as s :: l =>
-      let bn := parse_split_bf (split_nest (substring 1 (length s - 2) s)) in
-      bfc (bf_loop bn) (parse_split_bf l)
     | "" :: l => bfz
+    | String ch "" :: l => parse_bf1 ch (parse_split_bf l)
+    | (String "[" _) as s :: l =>
+      let l2 := split_nest (substring 1 (length s - 2) s) in
+      bfc (bf_loop (parse_split_bf l2)) (parse_split_bf l)
     | _ :: l => parse_split_bf l
     end%string.
   Proof.
     all: intros; try solve [cbn; omega].
-  
-  Fixpoint parse_bns_bf (s:bneststring) : BF :=
-    match s with
-    | bns_empty => bfz
-    | bns_ch ">" => bfc bf_right bfz
-    | bns_ch "<" => bfc bf_left bfz
-    | bns_ch "+" => bfc bf_inc bfz
-    | bns_ch "-" => bfc bf_dec bfz
-    | bns_ch "." => bfc bf_out bfz
-    | bns_ch "," => bfc bf_in bfz
-    | bns_ch _ => bfz
-    | bns_app s1 s2 => bfapp (parse_bns_bf s1) (parse_bns_bf s2)
-    | bns_nest s => bfc (bf_loop (parse_bns_bf s)) bfz
-    end.
+    rewrite sconcat_length_eq; rewrite split_nest_sconcat.
+    repeat rewrite <- teq10; cbn; rewrite substring_length_1.
+    destruct (Nat.min_dec (length s0 - 1) (length s0)); rewrite e; omega.
+  Defined.
 
-  Definition parse_bf (s:string) : option BF :=
-    match parse_bns s bns_empty [] with
-    | Some s => Some (parse_bns_bf s)
-    | None => None
-    end.
+  Definition parse_bf s :=
+    parse_split_bf (split_nest s).
 
-  Lemma bfapp_unparse:
-    forall b1 b2, unparse_bns (bns_unparse_bf (bfapp b1 b2)) =
-                  (unparse_bns (bns_unparse_bf b1) ++ unparse_bns (bns_unparse_bf b2))%string.
-    induction b1; intros.
-    - now cbn.
-    - simpl; rewrite IHb1; now rewrite append_assoc.
-  Qed.
- 
-  Lemma parse_bns_bf_correct (s:bneststring):
-    unparse_bns (bns_unparse_bf (parse_bns_bf s)) = min_unparse_bns s.
+  Lemma parse_bf_append s1 s2:
+    string_nest_check s1 ->
+    parse_bf (s1 ++ s2)%string = bfapp (parse_bf s1) (parse_bf s2).
   Proof.
-    induction s.
-    - cbn; auto.
-    - cbn; destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-      destruct a0, a1, a2, a3.
-      all: try solve [now cbn].
-      all: destruct a4, a5, a6, a7.
-      all: try solve [now cbn].
-    - cbn; rewrite bfapp_unparse; rewrite IHs1; now rewrite IHs2.
-    - simpl; rewrite IHs; now rewrite append_nil_r.
+    intros NC.
+    apply split_nest_correct in NC.
+    remember (split_nest s1) as l.
+    assert (s1 = sconcat l). {
+      rewrite Heql; now rewrite split_nest_sconcat.
+    }
+    repeat rewrite H.
+    clear s1 Heql H.
+
+    revert s2; induction l; intros.
+    - now simpl.
+    - simpl in NC; destruct NC as [NC1 NC2].
+      apply IHl with (s2:=s2) in NC2; clear IHl.
+      simpl.
+      rewrite <- append_assoc.
+
+      unfold parse_bf in *.
+      repeat rewrite (split_nest_append a); [ | auto | auto].
+      rewrite parse_split_bf_equation with (l:=a :: split_nest (sconcat l ++ s2)).
+      rewrite parse_split_bf_equation with (l:=a :: split_nest (sconcat l)).
+      rewrite NC2.
+      remember (parse_split_bf (split_nest (sconcat l))) as P.
+      remember (parse_split_bf (split_nest s2)) as Q.
+
+      destruct a as [s | ch s]; try contradiction.
+      destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct s; try contradiction.
+      all: destruct a0, a1, a2, a3; auto.
+      all: destruct a4, a5, a6, a7; auto.
   Qed.
 
-    
+  Lemma parse_bf_inverse b:
+    parse_bf (unparse_bf b) = b.
+  Proof.
+    induction b using bf_mut with
+    (P:=fun b => parse_bf (unparse_bf b) = b)
+      (P0:=fun b => parse_bf (unparse_bf1 b) = bfc b bfz).
+    1, 3-8: cbn; auto.
+
+    simpl.
+    rewrite parse_bf_append.
+    rewrite IHb; rewrite IHb0; now cbn.
+    apply unparse_bf1_nest_check.
+
+    simpl.
+    unfold parse_bf; unfold split_nest.
+    cbn.
+    rewrite split_nest'_stash by (rewrite unparse_bf_nest_check; auto).
+    rewrite unparse_bf_nest_check.
+    cbn.
+    rewrite parse_split_bf_equation.
+    remember (unparse_bf b ++ "]")%string as bb.
+    assert (exists ch bbp, bb = String ch bbp). {
+      destruct bb.
+      destruct (unparse_bf b); simpl in Heqbb; discriminate.
+      eauto.
+    }
+    destruct H as [ch [bbp H]]; rewrite H.
+    replace (length (String "[" (String ch bbp)) - 2) with (length bbp).
+    replace (substring 1 (length bbp) (String "[" (String ch bbp))) with (unparse_bf b).
+    unfold parse_bf in IHb; rewrite IHb.
+    auto.
+    rewrite <- H; simpl.
+    rewrite Heqbb.
+    replace (length bbp) with (length (unparse_bf b)).
+    now rewrite substring_append.
+    replace (length (unparse_bf b)) with (length (unparse_bf b) + length "]" - length "]")%string.
+    rewrite <- append_length.
+    rewrite <- Heqbb.
+    rewrite H.
+    simpl; omega.
+    simpl; omega.
+    simpl; omega.
+  Qed.
+
+  Lemma strip_nonbfchar_append s1 s2:
+    strip_nonbfchar (s1 ++ s2)%string = (strip_nonbfchar s1 ++ strip_nonbfchar s2)%string.
+  Proof.
+    induction s1; cbn; auto.
+    destruct (is_bfchar a).
+    rewrite <- append_comm_cons; rewrite IHs1; auto.
+    auto.
+  Qed.
+
+  Lemma unparse_bf_inverse s:
+    string_nest_check s ->
+    unparse_bf (parse_bf s) = strip_nonbfchar s.
+  Proof.
+    intros SN.
+    rewrite string_nester_iff in SN.
+    induction SN.
+    - now cbn.
+    - assert (string_nester (String ch "")) as SN1. {
+        constructor; auto; constructor.
+      }
+      rewrite <- string_nester_iff in SN1.
+      replace (String ch s) with (String ch "" ++ s)%string by (now cbn).
+      rewrite parse_bf_append; auto.
+      rewrite unparse_bfapp.
+      rewrite IHSN.
+      rewrite strip_nonbfchar_append.
+      apply append_tail.
+
+      destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
+      destruct a0, a1, a2, a3; cbn; auto.
+      all: destruct a4, a5, a6, a7; cbn; auto.
+      all: discriminate.
+    - replace (String "]" s2) with ("]" ++ s2)%string by (now cbn).
+      rewrite append_assoc.
+      rewrite parse_bf_append.
+      2: apply string_nester_checks; apply sn_nest; auto; apply sn_empty.
+      rewrite unparse_bfapp.
+      rewrite IHSN2.
+      rewrite strip_nonbfchar_append.
+      apply append_tail.
+
+      assert (split_nest_element (String "[" s1 ++ String "]" "")). {
+        destruct s1; cbn.
+        split; unfold string_nest_check; cbn; auto.
+        replace (length (s1 ++ "]") - 0)%string with (S (length s1)) by (rewrite append_length; simpl; omega).
+        rewrite substring_append.
+        rewrite <- string_nester_iff in SN1.
+        split; auto.
+        repeat rewrite append_comm_cons.
+        now apply string_nest_check_nest.
+      }
+
+      unfold parse_bf.
+      replace "]"%string with ("]" ++ "")%string at 1 by (now cbn).
+      rewrite append_assoc.
+      rewrite split_nest_append; auto.
+      unfold split_nest; simpl split_nest'.
+      rewrite parse_split_bf_equation.
+      rewrite <- append_comm_cons.
+      remember (s1 ++ "]")%string as s1x; destruct s1x.
+      destruct s1; discriminate.
+      remember (substring 1 (length (String "[" (String a s1x)) - 2) (String "[" (String a s1x))) as s1y.
+      rewrite Heqs1x in *; clear s1x Heqs1x.
+      simpl in Heqs1y.
+      replace (length (s1 ++ "]")%string - 1) with (length s1) in Heqs1y by (rewrite append_length; simpl; omega).
+      rewrite substring_append in Heqs1y.
+      rewrite Heqs1y.
+      unfold unparse_bf; fold unparse_bf.
+      unfold parse_bf in IHSN1; rewrite IHSN1.
+      rewrite parse_split_bf_equation; simpl.
+      rewrite append_nil_r.
+      rewrite strip_nonbfchar_append; now simpl.
+  Qed.
+
+
   Example parse_all_bf_commands:
     parse_bf "[><+-.,]" =
-    Some (bfc (bf_loop
-                 (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec (bfc bf_out (bfc bf_in bfz))))))) bfz).
+    bfc (bf_loop
+           (bfc bf_right (bfc bf_left (bfc bf_inc (bfc bf_dec (bfc bf_out (bfc bf_in bfz))))))) bfz.
   now cbn. Qed.
 
   Example parse_nesting_bf:
     parse_bf "[[[][]]][]" =
-    Some (bfc
-            (bf_loop (bfc
-                        (bf_loop (bfc
-                                    (bf_loop bfz)
-                                    (bfc (bf_loop bfz) bfz))) bfz))
-            (bfc (bf_loop bfz) bfz)).
+    bfc
+      (bf_loop (bfc
+                  (bf_loop (bfc
+                              (bf_loop bfz)
+                              (bfc (bf_loop bfz) bfz))) bfz))
+      (bfc (bf_loop bfz) bfz).
   now cbn. Qed.
 
   Example parse_empty_bf:
-    parse_bf EmptyString = Some bfz.
+    parse_bf EmptyString = bfz.
   now cbn. Qed.
 
   Example parse_bf_bad_left:
-    parse_bf "[[]" = None.
-  auto. Qed.
+    parse_bf "[[]" = bfc (bf_loop bfz) bfz.
+  now cbn. Qed.
 
   Example parse_bf_bad_right:
-    parse_bf "[]]" = None.
-  auto. Qed.
+    parse_bf "[]]" = bfc (bf_loop bfz) bfz.
+  now cbn. Qed.
 
 End BFParsing.
 
 
-
-(* GARBAGE STARTS HERE *)
-
-Fixpoint min_unparse_bns b :=
-  match b with
-  | bns_empty => ""%string
-  | bns_ch ch => if is_bfchar_nb ch then String ch "" else ""%string
-  | bns_app s1 s2 => (min_unparse_bns s1 ++ min_unparse_bns s2)%string
-  | bns_nest s => String "[" (min_unparse_bns s ++ "]")
-  end.
-
-  Lemma unparse_equal:
-    forall b, unparse_bf b = unparse_bns (bns_unparse_bf b).
-  Proof.
-    induction b using bf_mut
-    with (P:=fun b => unparse_bf b = unparse_bns (bns_unparse_bf b))
-           (P0:=fun b => unparse_bf (bfc b bfz) = unparse_bns (bns_unparse_bf1 b)).
-    all: try solve [cbn; auto].
-    cbn in IHb; rewrite append_nil_r in IHb.
-    cbn; rewrite IHb; now rewrite IHb0.
-    replace (unparse_bns (bns_unparse_bf1 (bf_loop b))) with (("[" ++ unparse_bf b ++ "]")%string).
-    cbn; now rewrite append_nil_r.
-    simpl; now rewrite <- IHb.
-  Qed.
-
-
-Inductive bneststring :=
-| bns_empty
-| bns_ch : ascii -> bneststring
-| bns_app : bneststring -> bneststring -> bneststring
-| bns_nest : bneststring -> bneststring.
-
-
-
-Definition checked_cons {A} (s:A) ls :=
-  match ls with
-  | Some ls => Some (s :: ls)
-  | None => None
-  end.
-
-Function checked_split_nest' s n x :=
-  match s, n with
-  | String "[" s, 0 => checked_split_nest' s 1 (x ++ "[")%string
-  | String "[" s, S _ => checked_split_nest' s (S n) (x ++ "[")%string
-  | String "]" s, 0 => None
-  | String "]" s, 1 => checked_cons (x ++ "]")%string (checked_split_nest' s 0 ""%string)
-  | String "]" s, S n => checked_split_nest' s n (x ++ "]")%string
-  | String ch s, 0 => checked_cons (x ++ String ch "")%string (checked_split_nest' s n ""%string)
-  | String ch s, S _ => checked_split_nest' s n (x ++ String ch "")%string
-  | ""%string, 0 => Some []
-  | ""%string, S _ => None
-  end.
-
-Definition checked_split_nest s := checked_split_nest' s 0 ""%string.
-
-Lemma checked_split_nest_ok:
-  forall s l, checked_split_nest s = Some l -> split_nest s = l.
-Admitted.
-
-
-Function parse_bns' (ls:list string) {measure sconcat_length ls} : bneststring :=
-  match ls with
-  | [] => bns_empty
-  | ""%string :: ls => bns_empty
-  | String ch "" :: ls => bns_app (bns_ch ch) (parse_bns' ls)
-  | x :: ls => let l := length x in
-               bns_app (parse_bns' (split_nest (substring 1 (l - 2) x))) (parse_bns' ls)
-  end.
-Proof.
-  1-2: intros; cbn; try omega.
-  intros; rewrite sconcat_length_eq.
-  rewrite split_nest_sconcat.
-  rewrite substring_length.
-  cbn.
-  rewrite Nat.min_lt_iff.
-  omega.
-Defined.
-
-Definition parse_bns s := parse_bns' (split_nest s).
-
-Inductive string_prenest_checker : string -> nat -> Prop :=
-| spnc_start : string_prenest_checker "["%string 1
-| spnc_lbrack : forall s n,
-    string_prenest_checker s n ->
-    string_prenest_checker (s ++ String "[" "")%string (S n)
-| spnc_rbrack : forall s n,
-    string_prenest_checker s (S (S n)) ->
-    string_prenest_checker (s ++ String "]" "")%string (S n)
-| spnc_ch : forall s ch n,
-    string_prenest_checker s n ->
-    ch <> "["%char ->
-    ch <> "]"%char ->
-    string_prenest_checker (s ++ String ch "")%string n.
-
-Lemma string_prenest_checker_n:
-  forall s n, string_prenest_checker s n -> n > 0.
-Proof.
-  intros; induction H; omega.
-Qed.
-
-Lemma string_prenest_check_match s n:
-  string_prenest_checker s n <->
-  (get 0 s = Some "["%char /\ string_prenest_check' s 0 = n /\ n > 0).
-Proof.
-  split.
-  - intros SP.
-    induction SP; cbn; auto; destruct_conjs.
-    all: split; [ now apply append_get | split ]; [ | omega ].
-    all: generalize (string_prenest_checker_n _ _ SP); intros G.
-    all: rewrite string_prenest_check'_append_nonzero by omega.
-    1, 2: rewrite H0; now cbn.
-    rewrite H2; cbn.
-    destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [now destruct n].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [now destruct n].
-  - revert n; induction s using reverse_ind; intros n G; destruct G as [G [S N]].
-    cbn in G; discriminate.
-    destruct s; simpl in G; inversion G; subst; clear G.
-    cbn; constructor.
-
-    assert (string_prenest_check' (String "[" s) 0 > 0) as G. {
-      apply string_prenest_check'_append_inv_nonzero in N.
-      destruct or N; [ discriminate | auto ].
-    }
-    assert (string_prenest_checker (String "[" s) (string_prenest_check' (String "[" s) 0)) as I. {
-      apply IHs; split; [ | split]; cbn; auto.
-    }
-    clear IHs.
-    apply string_prenest_check'_append_nonzero with (s2:=String ch "") in G.
-    rewrite G in *.
-    remember (string_prenest_check' (String "[" s) 0) as X; clear G HeqX.
-    remember (string_prenest_check' (String ch "") X) as Y; symmetry in HeqY.
-    destruct ch as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [apply spnc_ch; cbn in HeqY; destruct X; now subst].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [apply spnc_ch; cbn in HeqY; destruct X; now subst].
-    cbn in HeqY; subst; now constructor.
-    cbn in HeqY; subst.
-    destruct X; [ omega | destruct X; [ omega | subst ]].
-    now constructor.
-Qed.
-    
-
-(*
-Function parse_bns s bns l :=
-  match s with
-  | String "[" s => parse_bns s bns_empty (bns :: l)
-  | String "]" s => match l with
-                    | bx :: l => parse_bns s (bns_app bx (bns_nest bns)) l
-                    | [] => None
-                    end
-  | String ch s => parse_bns s (bns_app bns (bns_ch ch)) l
-  | ""%string => match l with
-                 | bx :: l => None
-                 | [] => Some bns
-                 end
-  end.
- *)
-
-Fixpoint unparse_bns b :=
-  match b with
-  | bns_empty => ""%string
-  | bns_ch ch => String ch ""
-  | bns_app s1 s2 => (unparse_bns s1 ++ unparse_bns s2)%string
-  | bns_nest s => String "[" (unparse_bns s ++ "]")
-  end.
-
-
-
-Lemma parse_bns_correct':
-  forall ls, split_nest_check' ls -> unparse_bns (parse_bns' ls) = sconcat ls.
-Proof.
-  intros ls; functional induction (parse_bns' ls); intros.
-  - now cbn.
-  - now cbn in H.
-  - simpl; rewrite IHb; auto.
-    now apply split_nest_check'_tail in H.
-  - simpl in H.
-
-
-    destruct x; try contradiction.
-    destruct x; try contradiction.
-    simpl in H.
-    destruct a as [x0 a1 a2 a3 a4 a5 a6 a7].
-    destruct x0, a1, a2, a3.
-    all: try solve [contradict H].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [contradict H].
-    destruct_conjs.
-    apply IHb0 in H0.
-    simpl.
-    induction s; cbn; auto.
-  destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-  destruct a0, a1, a2, a3.
-
-
-Definition split_nest_check ls :=
-  ls = [""%string] \/ split_nest_check' ls.
-
-
-
-Check bf_mut.
-
-Lemma unparse_bf_cons bf1 bf:
-  unparse_bf (bfc bf1 bf) = (unparse_bf1 bf1 ++ unparse_bf bf)%string.
-  induction bf; cbn; reflexivity.
-Qed.
-
-Lemma unparse_bf1_eq bf1:
-  unparse_bf (bfc bf1 bfz) = unparse_bf1 bf1.
-  simpl; rewrite append_nil_r; auto.
-Qed.
-
-Lemma bf_parse_inv:
-  forall bf, parse_bf (unparse_bf bf) = Some bf.
-  induction bf using bf_mut
-  with (P:=fun b => parse_bf (unparse_bf b) = Some b)
-         (P0:=fun b => parse_bf (unparse_bf (bfc b bfz)) = Some (bfc b bfz)).
-  1, 3-8: cbn; auto.
-
-  rewrite unparse_bf_cons.
-  unfold parse_bf in *.
-  rewrite parse_bf'_app with (bp':=bfp (bfc b bfz) [] true).
-  replace (unparse_bf bf) with ((unparse_bf bf ++ "")%string).
-  rewrite parse_bf'_app with (bp':=bfp (bfapp (bfc b bfz) bf) [] true); auto.
-  cbn.
-  rewrite bfapp_bfz; now cbn.
-  now rewrite append_nil_r.
-
-  unfold unparse_bf; fold unparse_bf.
-  unfold parse_bf; cbn.
-  rewrite parse_bf'_app2 with (bs:=bf); auto.
-  cbn.
-  now rewrite bfapp_bfz.
-Qed.
-
-
-Lemma bf_print_parse_loop (bf1 bf2: BF):
-  forall bf1' bf2',
-    parse_bf_state (chars_of_bf bf1) = parse_ok bf1' [] ->
-    parse_bf_state (chars_of_bf bf2) = parse_ok bf2' [] ->
-    parse_bf_state ("["%char :: (chars_of_bf bf1) ++ ["]"%char]
-                                  ++ (chars_of_bf bf2))
-    = parse_ok (bf_loop bf1 bf2) [].
-Proof.
-  intros.
-  cbn.
-Admitted.
-
-Lemma bf_print_parse_chars_inv (bf: BF):
-  parse_bf_state (chars_of_bf bf) = parse_ok bf [].
-Proof.
-  induction bf; auto;
-    rewrite chars_of_bf_equation, parse_bf_state_equation;
-    try (rewrite IHbf; auto).
-  now apply (bf_print_parse_loop _ _ bf1 bf2).
-Qed.
-
-Lemma chars_of_string_of_chars_inv (l: list ascii):
-  chars_of_string (string_of_chars l) = l.
-Proof.
-  induction l; auto.
-  rewrite string_of_chars_equation, chars_of_string_equation.
-  now rewrite IHl.
-Qed.
-
-(* Removes the parser from the trusted computing base *)
-Theorem bf_print_parse_inv (bf: BF): parse_bf (print_bf bf) = Some bf.
-Proof.
-  unfold parse_bf, print_bf; rewrite chars_of_string_of_chars_inv.
-  now rewrite bf_print_parse_chars_inv.
-Qed.
 
 (* BF Interpreter *)
 (* A BFTape is a map from [nat] indices to [Z] values *)
