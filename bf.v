@@ -311,19 +311,34 @@ Section StringNesting.
   Definition string_nest_check s :=
     string_nest_check' s 1 = 1.
 
+  Local Ltac nest_destruct :=
+    match goal with
+    | [ |- context [ string_nest_check _ ] ] => unfold string_nest_check
+    | [ H : context [ string_nest_check _ ] |- _ ] => unfold string_nest_check in H
+    | [ |- context [ string_nest_check' (String _ _) _ ] ] => cbn
+    | [ H : context [ string_nest_check' (String _ _) _ ] |- _ ] => cbn in H
+    | [ |- context [ string_nest_check' ""%string _ ] ] => cbn
+    | [ H : context [ string_nest_check' ""%string _ ] |- _ ] => cbn in H
+    | [ |- context [ string_nest_check' (append (String _ _) _) ] ] => rewrite <- append_comm_cons
+    | [ |- context [ ascii_dec ?ch "[" ] ] => destruct (ascii_dec ch "[")
+    | [ H : context [ ascii_dec ?ch "[" ] |- _ ] => destruct (ascii_dec ch "[")
+    | [ |- context [ Nat.eq_dec ?n 0 ] ] => destruct (Nat.eq_dec n 0)
+    | [ H : context [ Nat.eq_dec ?n 0 ] |- _ ] => destruct (Nat.eq_dec n 0)
+    | [ |- context [ ascii_dec ?ch "]" ] ] => destruct (ascii_dec ch "]")
+    | [ H : context [ ascii_dec ?ch "]" ] |- _ ] => destruct (ascii_dec ch "]")
+    | [ H : ?ch = "["%char |- _ ] => rewrite H in *; clear H
+    | [ H : ?ch = "]"%char |- _ ] => rewrite H in *; clear H
+    | [ H : "["%char <> "["%char |- _ ] => congruence
+    | [ H : "]"%char <> "]"%char |- _ ] => congruence
+    end; try nest_destruct.
+
   Lemma string_nest_check'_append_nonzero s1 s2 n:
     string_nest_check' s1 n > 0 ->
     string_nest_check' (s1 ++ s2)%string n =
     string_nest_check' s2 (string_nest_check' s1 n).
   Proof.
-    revert s2 n; induction s1; intros.
-    cbn; auto.
-    cbn in *.
-    destruct (ascii_dec a "[").
-    1: now apply IHs1.
-    destruct (ascii_dec a "]").
-    1: destruct n; [ | destruct n ]; try omega.
-    all: now apply IHs1.
+    revert s2 n; induction s1; intros; nest_destruct; auto.
+    destruct n as [|[|n]]; [ omega .. | auto ].
   Qed.
 
   Lemma string_nest_check'_add s n:
@@ -332,18 +347,14 @@ Section StringNesting.
               string_nest_check' s m =
               string_nest_check' s n + (m - n).
   Proof.
-    revert n; induction s; intros.
-    1: cbn; auto; omega.
-    simpl in *.
-    destruct (ascii_dec a "[").
-    1: replace (m - n) with (S m - S n) by omega.
-    1: apply IHs; auto; omega.
-    destruct (ascii_dec a "]").
-    1: destruct n; [ omega | destruct n ]; [ omega | ].
-    1: destruct m; [ omega | destruct m ]; [ omega | ].
-    1: replace (S (S m) - S (S n)) with (S m - S n) by omega.
-    1: apply IHs; auto; omega.
-    now apply IHs.
+    revert n; induction s; intros; nest_destruct; auto.
+    - omega.
+    - replace (m - n) with (S m - S n) by omega.
+      apply IHs; auto; omega.
+    - destruct n as [|[|n]]; try omega.
+      destruct m; try destruct m; try omega.
+      replace (S (S m) - S (S n)) with (S m - S n) by omega.
+      apply IHs; auto; omega.
   Qed.
 
   Lemma string_nest_check_tail s1 s2:
@@ -351,7 +362,7 @@ Section StringNesting.
     string_nest_check (s1 ++ s2)%string ->
     string_nest_check s2.
   Proof.
-    intros; unfold string_nest_check in *.
+    intros; nest_destruct.
     rewrite string_nest_check'_append_nonzero in H0 by omega.
     now rewrite H in H0.
   Qed.
@@ -361,11 +372,24 @@ Section StringNesting.
     string_nest_check s2 ->
     string_nest_check (s1 ++ s2)%string.
   Proof.
-    intros; unfold string_nest_check in *.
+    intros; nest_destruct.
     rewrite string_nest_check'_append_nonzero.
     now rewrite H.
     rewrite H; omega.
   Qed.
+
+  Ltac nest_append_destruct :=
+    match goal with
+    | [ H : string_nest_check' ?s1 1 = 1
+        |- context [string_nest_check' (append ?s1 ?s2) 2 = _] ] =>
+      let HS := fresh H "_S" in
+      assert (string_nest_check' s1 2 = 2) by
+          (rewrite string_nest_check'_add with (n:=1); try rewrite H; omega);
+      rewrite string_nest_check'_append_nonzero
+    end; match goal with
+         | [ H : string_nest_check' ?s1 2 = _
+             |- context [string_nest_check' ?s1 2] ] => rewrite H; try nest_destruct; try omega
+         end.
 
   Lemma string_nest_check'_break s n m:
     string_nest_check' s (S n) = S m ->
@@ -379,93 +403,49 @@ Section StringNesting.
 
     destruct s; simpl in H0; [ omega | ].
 
-    destruct (ascii_dec a "[")%char. {
-      (* "[" case *)
-      subst.
+    nest_destruct.
+    - (* "[" case *)
       apply H in H0; [ | simpl; omega | omega ].
       destruct H0 as [s1 [s2 [A1 [A2 A3]]]].
       apply H in A3; [ | | omega ].
       destruct A3 as [t1 [t2 [B1 [B2 B3]]]].
       exists (String "[" (s1 ++ String "]" t1)), t2.
       split; [ | split ].
-      - rewrite A1; rewrite B1; repeat rewrite append_comm_cons.
+      + rewrite A1; rewrite B1; repeat rewrite append_comm_cons.
         now rewrite append_assoc.
-      - simpl.
-        assert (string_nest_check' s1 2 = 2). {
-          rewrite string_nest_check'_add with (n:=1); try rewrite A2; omega.
-        }
-        rewrite string_nest_check'_append_nonzero.
-        rewrite H0.
-        now simpl.
-        rewrite H0; omega.
-      - auto.
-      - simpl; rewrite A1; rewrite append_length; simpl; omega.
-    }
-
-    destruct (ascii_dec a "]")%char. {
-      (* "]" case *)
-      subst.
+      + nest_destruct; nest_append_destruct.
+      + auto.
+      + simpl; rewrite A1; rewrite append_length; simpl; omega.
+    - (* "]" case *)
       destruct n; [ omega | ].
       exists ""%string, s; split; [ | split ]; auto.
-    }
-
-    (* everything else *)
-    apply H in H0; auto.
-    destruct H0 as [s1 [s2 [X0 [X1 X2]]]].
-    subst; exists (String a s1), s2; split; [ | split ]; auto.
-    cbn.
-    destruct (ascii_dec a "["); [ contradiction | ].
-    destruct (ascii_dec a "]"); [ contradiction | auto ].
+    - (* everything else *)
+      apply H in H0; auto.
+      destruct H0 as [s1 [s2 [X0 [X1 X2]]]].
+      subst; exists (String a s1), s2; split; [ | split ]; auto.
+      now nest_destruct.
   Qed.
 
   Lemma string_nest_check_break ch s:
     string_nest_check (String ch s) ->
     exists s1 s2, s = (s1 ++ s2)%string /\ string_nest_check (String ch s1) /\ string_nest_check s2.
   Proof.
-    destruct (ascii_dec ch "[")%char. {
-      (* "[" case *)
-      subst; intros.
-      unfold string_nest_check in *.
-      simpl in H.
-      apply string_nest_check'_break in H.
-      destruct H as [s1 [s2 [X0 [X1 X2]]]].
-      exists (s1 ++ "]")%string, s2.
-      split; [ | split].
-      rewrite <- append_assoc; apply X0.
-      simpl.
-      assert (string_nest_check' s1 2 = 2). {
-        rewrite string_nest_check'_add with (n:=1); try rewrite X1; omega.
-      }
-      rewrite string_nest_check'_append_nonzero.
-      rewrite H; now simpl.
-      rewrite H; omega.
-      auto.
-      omega.
-    }
-
-    destruct (ascii_dec ch "]")%char. {
-      (* impossible *)
-      subst; intros; unfold string_nest_check in H; cbn in H; discriminate.
-    }
-
-    (* everything else *)
-    intros; exists ""%string, s; unfold string_nest_check in *; cbn in *.
-    split; [ | split ]; auto.
-    all: destruct (ascii_dec ch "["); [ contradiction | ].
-    all: destruct (ascii_dec ch "]"); [ contradiction | auto ].
+    intros; nest_destruct.
+    - (* "[" case *)
+      exists s, ""%string.
+      split; [ | split]; auto.
+      now rewrite append_nil_r.
+    - (* "]" case *)
+      discriminate.
+    - (* everything else *)
+      exists ""%string, s; split; [ | split]; auto.
   Qed.
 
   Lemma string_nest_check_nest s:
     string_nest_check s ->
     string_nest_check (String "[" s ++ "]")%string.
   Proof.
-    intros; unfold string_nest_check in *.
-    assert (string_nest_check' s 2 = 2). {
-      rewrite string_nest_check'_add with (n:=1); try rewrite H; omega.
-    }
-    simpl; rewrite string_nest_check'_append_nonzero.
-    rewrite H0; now simpl.
-    rewrite H0; omega.
+    intros; nest_destruct; now nest_append_destruct.
   Qed.
 
 
@@ -490,62 +470,32 @@ Section StringNesting.
     string_nester s -> string_nest_check s.
   Proof.
     intros; induction H; unfold string_nest_check in *; cbn; auto.
-    - destruct (ascii_dec ch "["); [ contradiction | ].
-      destruct (ascii_dec ch "]"); [ contradiction | auto ].
-    - assert (string_nest_check' s1 2 = 2). {
-        rewrite string_nest_check'_add with (n:=1); try rewrite H1; omega.
-      }
-      rewrite string_nest_check'_append_nonzero.
-      rewrite H1; simpl; auto.
-      rewrite H1; omega.
+    - now nest_destruct.
+    - now nest_append_destruct.
   Qed.
 
   Lemma string_checks_nester s:
     string_nest_check s -> string_nester s.
   Proof.
-    induction s using string_strong_ind.
-    intros; destruct s; auto.
-
-    destruct (ascii_dec a "[")%char. {
-      apply string_nest_check_break in H0.
+    induction s using string_strong_ind; intros.
+    destruct s; auto.
+    nest_destruct.
+    Local Ltac do_length := auto; simpl; repeat rewrite append_length; simpl; omega.
+    - apply string_nest_check'_break in H0; [ | omega ].
       destruct H0 as [s1 [s2 [X0 [X1 X2]]]]; subst.
-      apply H in X2.
-      2: simpl; rewrite append_length; omega.
+      apply H in X2; [ | do_length ].
       rewrite append_comm_cons.
       destruct s2.
-      - rewrite append_nil_r.
-        unfold string_nest_check in X1; cbn in X1.
-        apply string_nest_check'_break in X1.
-        destruct X1 as [s2 [s3 [Y0 [Y1 Y2]]]].
-        rewrite Y0.
-        replace (String "]" s3) with ("]" ++ s3)%string by (now simpl).
-        rewrite append_comm_cons; rewrite append_assoc.
-        apply string_nester_append.
-        apply sn_nest; auto.
-        + apply H; auto.
-          rewrite Y0; simpl; repeat rewrite append_length; omega.
-        + apply H; auto.
-          rewrite Y0; simpl; repeat rewrite append_length; simpl; omega.
-        + omega.
-      - apply string_nester_append.
-        + apply H; auto.
-          simpl; repeat rewrite append_length; simpl; omega.
-        + auto.
-    }
-
-    assert (string_nester (String a "")). {
-      apply sn_ch; auto.
-      intros F; subst.
-      unfold string_nest_check in H0; simpl in H0; discriminate.
-    }
-    destruct s; auto.
-    replace (String a (String a0 s)) with (String a "" ++ String a0 s)%string by (now cbn).
-    apply string_nester_append; auto.
-    apply H.
-    simpl; omega.
-    apply string_nest_check_tail with (s1:=String a ""%string).
-    now apply string_nester_checks.
-    auto.
+      + apply sn_nest; auto.
+        apply H; do_length.
+      + replace (String "[" s1 ++ String "]" (String a0 s2))%string
+        with ((String "[" s1 ++ "]") ++ String a0 s2)%string.
+        apply string_nester_append; auto.
+        apply H; [ do_length | ].
+        nest_destruct; nest_append_destruct.
+        now rewrite <- append_assoc.
+    - discriminate.
+    - destruct s; auto.
   Qed.
 
   Lemma string_nester_iff:
@@ -580,15 +530,13 @@ Section StringNesting.
     string_prenest_check' (s1 ++ s2) n =
     string_prenest_check' s2 (string_prenest_check' s1 n).
   Proof.
-    revert s2 n; induction s1; cbn; intros.
-    destruct n; omega.
-    destruct (ascii_dec a "["); [ now apply IHs1 | ].
-    destruct (Nat.eq_dec n 0); [ omega | ].
-    destruct (ascii_dec a "]"). {
-      destruct n; [ omega | destruct n ]; [ omega | ].
+    revert s2 n; induction s1; cbn; intros; auto.
+    nest_destruct.
+    - now apply IHs1.
+    - omega.
+    - destruct n as [|[|n]]; [omega ..|].
       now apply IHs1.
-    }
-    now apply IHs1.
+    - now apply IHs1.
   Qed.
 
   Lemma string_prenest_check'_append_zero s1 s2 n:
@@ -606,11 +554,11 @@ Section StringNesting.
     2: rewrite string_prenest_check'_append_nonzero in * by (rewrite HeqN; omega).
     all: rewrite HeqN in *; clear HeqN.
     all: cbn in *.
-    all: destruct (ascii_dec ch "["); [ discriminate | ].
-    all: destruct (Nat.eq_dec n 0); [ auto | ].
-    all: destruct (ascii_dec ch "]"); [ | try discriminate; try contradiction ].
-    1: destruct n; [ | destruct n ]; auto; discriminate.
-    all: destruct N; auto; discriminate.
+    all: nest_destruct; auto.
+    all: try discriminate.
+    - destruct n as [|[|n]]; auto; discriminate.
+    - congruence.
+    - destruct N as [|[|N]]; auto; discriminate.
   Qed.
 
   Lemma string_prenest_check'_append_inv_nonzero s1 s2 n:
@@ -631,32 +579,11 @@ Section StringNesting.
     forall m, string_prenest_check' s (n + m) =
               string_prenest_check' s n + m.
   Proof.
-    revert n; induction s; intros; cbn; auto.
-    destruct (ascii_dec a "["). {
-      subst; cbn in H; rewrite <- plus_Sn_m; now apply IHs.
-    }
-    destruct (Nat.eq_dec n 0). {
-      subst; cbn in H.
-      destruct (ascii_dec a "["); [ | omega ].
-      replace (0 + m) with m by omega.
-      destruct (Nat.eq_dec m 0); subst; auto.
-      destruct (ascii_dec "[" "]"); [ discriminate | ].
-      apply IHs.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [ cbn in *; destruct n;
-                     [ omega | rewrite plus_Sn_m;
-                               rewrite <- plus_Sn_m;
-                               now apply IHs ] ].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [ cbn in *; destruct n;
-                     [ omega | rewrite plus_Sn_m;
-                               rewrite <- plus_Sn_m;
-                               now apply IHs ] ].
-    cbn in *; rewrite <- plus_Sn_m. now apply IHs.
-    cbn in *; destruct n; [ omega | destruct n ]; [ omega | ].
-    repeat rewrite plus_Sn_m; rewrite <- plus_Sn_m.
-    now apply IHs.
+    revert n; induction s; intros; cbn in *; auto.
+    nest_destruct; auto; try omega.
+    - rewrite <- plus_Sn_m; now apply IHs.
+    - destruct n as [|[|n]]; try omega.
+      repeat rewrite plus_Sn_m; rewrite <- plus_Sn_m; now apply IHs.
   Qed.
 
   Lemma string_prenest_check'_lbrack s:
@@ -665,10 +592,7 @@ Section StringNesting.
   Proof.
     induction s; intros; cbn in *.
     omega.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3; try omega.
-    all: destruct a4, a5, a6, a7; try omega.
-    auto.
+    destruct (ascii_dec a "["); [ subst; auto | omega ].
   Qed.
 
 
@@ -677,16 +601,11 @@ Section StringNesting.
     forall s n, string_prenest_check' s n > 0 ->
                 string_nest_check' s (S n) = S (string_prenest_check' s n).
   Proof.
-    induction s; intros.
-    now cbn.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [cbn in *; destruct n; [ omega | auto ]].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [cbn in *; destruct n; [ omega | auto ]].
-    cbn in *; now apply IHs in H.
-    cbn in *; destruct n; [ omega | destruct n ]; [ omega | ].
-    now apply IHs in H.
+    induction s; intros; cbn in *; auto.
+    nest_destruct; try omega.
+    - now apply IHs.
+    - destruct n as [|[|n]]; [omega .. | now apply IHs].
+    - now apply IHs.
   Qed.
 
   Lemma string_prenest_nest_eq_1:
@@ -696,13 +615,9 @@ Section StringNesting.
   Proof.
     induction s; intros n NZ P.
     now cbn in *.
-    destruct a as [a0 a1 a2 a3 a4 a5 a6 a7].
-    destruct a0, a1, a2, a3.
-    all: try solve [cbn in *; destruct n; [ omega | auto ]].
-    all: destruct a4, a5, a6, a7.
-    all: try solve [cbn in *; destruct n; [ omega | auto ]].
-    cbn in *; destruct n; [ | destruct n ]; try omega.
-    apply IHs; omega.
+    simpl in P; nest_destruct; try omega; auto.
+    destruct n as [|[|n]]; [discriminate .. |].
+    apply IHs; [omega | auto].
   Qed.
 
   Lemma string_prenest_check'_add_rbrack s:
@@ -750,7 +665,7 @@ Section StringNesting.
      e.g., "abc[def][" -> ["a"; "b"; "c"; "[def]"; "["]. *)
 
   Function split_nest' s n x :=
-    match s, n with
+    match s with
     | String "[" s, 0 => split_nest' s 1 (x ++ "[")%string
     | String "[" s, S _ => split_nest' s (S n) (x ++ "[")%string
     | String "]" s, 1 => (x ++ "]")%string :: split_nest' s 0 ""%string
